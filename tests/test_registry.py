@@ -57,6 +57,12 @@ class TestToolRegistry:
         results = registry.search("anything")
         assert results == []
 
+    def test_search_no_relevant_match_returns_empty(self):
+        registry = ToolRegistry()
+        registry.register_many([sample_func_a, sample_func_b, sample_func_c])
+        results = registry.search("portfolio rebalance optimizer")
+        assert results == []
+
     def test_get_tool(self):
         registry = ToolRegistry()
         registry.register(sample_func_a)

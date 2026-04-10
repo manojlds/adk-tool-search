@@ -39,17 +39,34 @@ class ToolRegistry:
             self._rebuild_index()
 
     def search(self, query: str, n: int = 5) -> list[str]:
-        """Return top-N tool summaries as 'name: description snippet'."""
+        """Return top-N relevant tool summaries as 'name: description snippet'."""
         if not self._bm25:
             return []
+
         tokenized_query = query.lower().split()
-        top_docs = self._bm25.get_top_n(tokenized_query, self._descriptions, n=n)
+        if not tokenized_query:
+            return []
+
+        scores = self._bm25.get_scores(tokenized_query)
+        ranked_indices = sorted(
+            range(len(self._descriptions)),
+            key=lambda idx: float(scores[idx]),
+            reverse=True,
+        )
+
         results = []
-        for doc in top_docs:
-            idx = self._descriptions.index(doc)
+        for idx in ranked_indices:
+            if len(results) >= n:
+                break
+
+            if float(scores[idx]) <= 0:
+                continue
+
+            doc = self._descriptions[idx]
             name = self._tool_names[idx]
             snippet = doc.split("\n")[0][:120]
             results.append(f"{name}: {snippet}")
+
         return results
 
     def get_tool(self, name: str) -> Any | None:
