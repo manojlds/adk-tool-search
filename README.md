@@ -38,7 +38,7 @@ This library reduces context usage by ~95% and keeps tool selection accurate acr
 ## Install
 
 ```bash
-pip install -e .
+uv sync
 ```
 
 ## Quick start
