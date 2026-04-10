@@ -38,7 +38,15 @@ This library reduces context usage by ~95% and keeps tool selection accurate acr
 ## Install
 
 ```bash
-uv sync
+pip install adk-tool-search
+```
+
+### Development setup
+
+```bash
+git clone https://github.com/manojlds/adk-tool-search.git
+cd adk-tool-search
+uv sync --all-extras
 ```
 
 ## Quick start
