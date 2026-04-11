@@ -1,179 +1,27 @@
-"""LLM integration tests — tool search agent with a real LLM backend.
-
-Run with: uv run pytest -m llm
-"""
+"""LLM test: no-match handling, session isolation, persistence, and skill auto-load."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from google.adk.agents import LlmAgent
 from google.adk.runners import InMemoryRunner, Runner
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
 
-from adk_tool_search import (
-    ToolRegistry,
-    create_tool_search_agent,
-)
+from adk_tool_search import ToolRegistry, create_tool_search_agent
 from tests.conftest import (
     make_litellm_model,
-    run_agent,
-    run_agent_with_call_args,
     run_agent_with_payloads,
     run_runner_session_turn,
     run_runner_session_turn_allow_error,
 )
+from tests.llm.conftest import ALL_TOOLS
 
 pytestmark = [pytest.mark.llm]
 
 
-# ── Dummy tools for the agent to discover ───────────────────────────────────
-
-
-def get_weather(location: str, unit: str = "celsius") -> dict:
-    """Get the current weather for a location.
-
-    Args:
-        location: City name or coordinates.
-        unit: Temperature unit - 'celsius' or 'fahrenheit'.
-    """
-    return {"location": location, "temperature": 22, "unit": unit, "condition": "sunny"}
-
-
-def get_forecast(location: str, days: int = 5) -> dict:
-    """Get a multi-day weather forecast for a location.
-
-    Args:
-        location: City name or coordinates.
-        days: Number of days to forecast (1-14).
-    """
-    return {
-        "location": location,
-        "days": days,
-        "forecast": [{"day": i, "temp": 20 + i} for i in range(days)],
-    }
-
-
-def send_email(to: str, subject: str, body: str) -> dict:
-    """Send an email to a recipient.
-
-    Args:
-        to: Email address of the recipient.
-        subject: Email subject line.
-        body: Email body text.
-    """
-    return {"status": "sent", "to": to, "subject": subject}
-
-
-def calculate(expression: str) -> dict:
-    """Evaluate a mathematical expression.
-
-    Args:
-        expression: Math expression to evaluate (e.g., '2 + 2', 'sqrt(16)').
-    """
-    return {"expression": expression, "result": eval(expression)}  # noqa: S307
-
-
-def translate_text(text: str, target_language: str) -> dict:
-    """Translate text to a target language.
-
-    Args:
-        text: Text to translate.
-        target_language: Target language code (e.g., 'es', 'fr', 'de').
-    """
-    return {"translated": f"[{target_language}] {text}", "source_language": "en"}
-
-
-ALL_TOOLS = [get_weather, get_forecast, send_email, calculate, translate_text]
-
-
-def _make_agent() -> LlmAgent:
-    """Create a tool-search agent with all dummy tools registered."""
-    registry = ToolRegistry()
-    registry.register_many(ALL_TOOLS)
-
-    return create_tool_search_agent(
-        name="test_agent",
-        model=make_litellm_model(),
-        registry=registry,
-        instruction=(
-            "You are a helpful assistant with a library of tools.\n"
-            "You start with only search_tools and load_tool.\n"
-            "When you need to perform an action:\n"
-            "1. Call search_tools with keywords describing what you need\n"
-            "2. Call load_tool with the exact tool name from the results\n"
-            "3. Then call the loaded tool directly\n"
-        ),
-    )
-
-
 @pytest.mark.timeout(120)
-async def test_search_and_use_weather_tool():
-    """Agent should search for, load, and call the weather tool."""
-    agent = _make_agent()
-    texts, calls_with_args, responses = await run_agent_with_call_args(
-        agent, "What's the weather in Tokyo?"
-    )
-    calls = [call["name"] for call in calls_with_args]
-
-    # Agent should have called search_tools, load_tool, and get_weather
-    assert "search_tools" in calls, f"Expected search_tools in calls, got: {calls}"
-    assert "load_tool" in calls, f"Expected load_tool in calls, got: {calls}"
-    assert "get_weather" in calls, f"Expected get_weather in calls, got: {calls}"
-
-    weather_calls = [call for call in calls_with_args if call["name"] == "get_weather"]
-    assert weather_calls, f"Expected get_weather call details, got: {calls_with_args}"
-
-    weather_args = weather_calls[-1]["args"]
-    assert isinstance(weather_args, dict), f"Expected get_weather args dict, got: {weather_args}"
-
-    location = weather_args.get("location", "")
-    assert isinstance(location, str) and "tokyo" in location.lower(), (
-        f"Expected get_weather location to include 'Tokyo', got: {weather_args}"
-    )
-
-    # Final response should mention Tokyo
-    full_text = " ".join(texts).lower()
-    assert "tokyo" in full_text, f"Expected 'tokyo' in response, got: {full_text}"
-
-
-@pytest.mark.timeout(120)
-async def test_search_and_use_calculate_tool():
-    """Agent should find and use the calculate tool for math."""
-    agent = _make_agent()
-    texts, calls, responses = await run_agent(agent, "What is 42 * 17?")
-
-    full_text = " ".join(texts).lower()
-    assert "714" in full_text, f"Expected '714' in response, got: {full_text}"
-
-    if calls:
-        assert "search_tools" in calls, f"Expected search_tools in calls, got: {calls}"
-        assert "load_tool" in calls, f"Expected load_tool in calls, got: {calls}"
-        assert "calculate" in calls, f"Expected calculate in calls, got: {calls}"
-
-
-@pytest.mark.timeout(120)
-async def test_factory_helper():
-    """The create_tool_search_agent factory should produce a working agent."""
-    registry = ToolRegistry()
-    registry.register_many(ALL_TOOLS)
-
-    agent = create_tool_search_agent(
-        name="factory_test",
-        model=make_litellm_model(),
-        registry=registry,
-    )
-
-    texts, calls, responses = await run_agent(agent, "Translate 'hello world' to Spanish")
-
-    assert "search_tools" in calls, f"Expected search_tools in calls, got: {calls}"
-    assert "load_tool" in calls, f"Expected load_tool in calls, got: {calls}"
-    assert "translate_text" in calls, f"Expected translate_text in calls, got: {calls}"
-
-
-@pytest.mark.timeout(120)
-async def test_search_with_no_matching_tool_does_not_load_or_call_domain_tool():
+async def test_search_with_no_matching_tool():
     """Agent handles empty search results without loading/calling unrelated tools."""
     registry = ToolRegistry()
     registry.register_many(ALL_TOOLS)
@@ -257,7 +105,6 @@ async def test_loaded_tools_are_isolated_per_session():
     session_a = await runner.session_service.create_session(app_name="test", user_id="test_user")
     session_b = await runner.session_service.create_session(app_name="test", user_id="test_user")
 
-    # Session A explicitly loads get_weather.
     _, calls_a1, _ = await run_runner_session_turn(
         runner,
         session_id=session_a.id,
@@ -266,7 +113,6 @@ async def test_loaded_tools_are_isolated_per_session():
     )
     assert "load_tool" in calls_a1, f"Expected load_tool call in session A, got: {calls_a1}"
 
-    # Next turn in session A should have get_weather available.
     _, calls_a2, _ = await run_runner_session_turn(
         runner,
         session_id=session_a.id,
@@ -277,7 +123,6 @@ async def test_loaded_tools_are_isolated_per_session():
         f"Expected get_weather call in session A after loading, got: {calls_a2}"
     )
 
-    # Session B should start with only meta-tools (no leaked get_weather).
     _, calls_b1, _ = await run_runner_session_turn(
         runner,
         session_id=session_b.id,
@@ -286,8 +131,6 @@ async def test_loaded_tools_are_isolated_per_session():
     )
     assert "search_tools" in calls_b1, f"Expected search_tools call in session B, got: {calls_b1}"
 
-    # Explicitly attempt direct domain-tool usage in session B.
-    # Depending on model behavior, it may either decline to call or attempt and fail.
     _, calls_b2, _, session_b_error = await run_runner_session_turn_allow_error(
         runner,
         session_id=session_b.id,
@@ -302,15 +145,11 @@ async def test_loaded_tools_are_isolated_per_session():
             f"Expected missing-tool error in session B, got: {session_b_error}"
         )
     else:
-        # If the model emits a terminal direct call near stream end, ADK may raise
-        # before we receive the function_call event. Treat missing-tool error as
-        # equivalent evidence that get_weather was not available in session B.
         if session_b_error is not None:
             assert "Tool 'get_weather' not found" in str(session_b_error), (
                 f"Expected missing-tool error in session B, got: {session_b_error}"
             )
 
-    # Verify tool visibility captured before each model call.
     assert session_a.id in tools_seen_by_session, "Expected tool snapshots for session A"
     assert session_b.id in tools_seen_by_session, "Expected tool snapshots for session B"
 
@@ -326,45 +165,6 @@ async def test_loaded_tools_are_isolated_per_session():
     first_tools_b = tools_seen_by_session[session_b.id][0]
     assert first_tools_b == {"search_tools", "load_tool"}, (
         f"Expected only meta-tools at start of session B, got: {first_tools_b}"
-    )
-
-
-@pytest.mark.timeout(120)
-async def test_single_tool_search_returns_match_for_relevant_query():
-    """Regression: search should still find relevant tools in a tiny registry."""
-    registry = ToolRegistry()
-    registry.register(get_weather)
-
-    agent = create_tool_search_agent(
-        name="single_tool_search_regression",
-        model=make_litellm_model(),
-        registry=registry,
-        instruction=(
-            "Debug mode: call search_tools exactly once with query 'weather'. "
-            "Do not call load_tool or any other tools. Then report the search result."
-        ),
-    )
-
-    _, calls_with_args, responses_with_payloads = await run_agent_with_payloads(
-        agent,
-        "Run the debug search now.",
-    )
-
-    search_calls = [call for call in calls_with_args if call["name"] == "search_tools"]
-    assert search_calls, f"Expected search_tools call, got: {calls_with_args}"
-
-    search_responses = [item for item in responses_with_payloads if item["name"] == "search_tools"]
-    assert search_responses, (
-        f"Expected search_tools response payload, got: {responses_with_payloads}"
-    )
-
-    payload = search_responses[-1]["response"]
-    assert isinstance(payload, dict), f"Expected dict payload, got: {payload}"
-
-    result_list = payload.get("result")
-    assert isinstance(result_list, list), f"Expected list search results, got: {payload}"
-    assert any(str(item).startswith("get_weather:") for item in result_list), (
-        f"Expected 'get_weather' in search_tools results for query 'weather', got: {result_list}"
     )
 
 
@@ -386,7 +186,6 @@ async def test_loaded_tool_persists_across_runner_restart_with_sqlite_session(tm
 
     session = await runner_1.session_service.create_session(app_name="test", user_id="test_user")
 
-    # First turn loads the tool.
     _, calls_first, _ = await run_runner_session_turn(
         runner_1,
         session_id=session.id,
@@ -395,7 +194,6 @@ async def test_loaded_tool_persists_across_runner_restart_with_sqlite_session(tm
     )
     assert "load_tool" in calls_first, f"Expected load_tool call, got: {calls_first}"
 
-    # Simulate process restart: new agent + new callback state + new runner.
     agent_2 = create_tool_search_agent(
         name="restart_persistence_test",
         model=make_litellm_model(),
@@ -448,7 +246,6 @@ async def test_use_skill_auto_loads_allowed_tools_for_session():
     runner = InMemoryRunner(agent=agent, app_name="test")
     session = await runner.session_service.create_session(app_name="test", user_id="test_user")
 
-    # First turn activates the skill.
     _, calls_1, _ = await run_runner_session_turn(
         runner,
         session_id=session.id,
@@ -457,7 +254,6 @@ async def test_use_skill_auto_loads_allowed_tools_for_session():
     )
     assert "use_skill" in calls_1, f"Expected use_skill call, got: {calls_1}"
 
-    # Next turn should have get_weather available without explicit load_tool.
     _, calls_2, _ = await run_runner_session_turn(
         runner,
         session_id=session.id,
