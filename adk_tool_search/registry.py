@@ -4,16 +4,49 @@ from typing import Any
 
 from rank_bm25 import BM25Okapi
 
+_DEFAULT_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "has",
+        "he",
+        "in",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "to",
+        "was",
+        "were",
+        "will",
+        "with",
+    }
+)
+
 
 class ToolRegistry:
     """Indexes tools for lightweight BM25 search without loading full schemas into context."""
 
-    def __init__(self):
+    def __init__(self, *, min_token_length: int = 2, stopwords: frozenset[str] | None = None):
         self._tools: dict[str, Any] = {}
         self._descriptions: list[str] = []
         self._tokenized_descriptions: list[list[str]] = []
         self._tool_names: list[str] = []
         self._bm25: BM25Okapi | None = None
+        self._min_token_length = min_token_length
+        self._stopwords = stopwords if stopwords is not None else _DEFAULT_STOPWORDS
 
     def register(self, tool: Any) -> None:
         """Register a tool (function, ADK BaseTool, or MCP tool) for search."""
@@ -41,7 +74,12 @@ class ToolRegistry:
             self._rebuild_index()
 
     def search(self, query: str, n: int = 5) -> list[str]:
-        """Return top-N relevant tool summaries as 'name: description snippet'."""
+        """Return top-N relevant tool summaries as 'name: description snippet'.
+
+        Uses BM25 scoring with name-match boosting:
+        - Exact name match: +5
+        - Substring name match: +2
+        """
         if not self._bm25:
             return []
 
@@ -51,38 +89,40 @@ class ToolRegistry:
 
         scores = self._bm25.get_scores(tokenized_query)
 
-        positive_ranked_indices = [
-            idx
-            for idx in sorted(
-                range(len(self._descriptions)),
-                key=lambda item_idx: float(scores[item_idx]),
-                reverse=True,
-            )
-            if float(scores[idx]) > 0
-        ]
+        query_tokens = set(self._tokenize(query))
 
-        if positive_ranked_indices:
-            ranked_indices = positive_ranked_indices
-        else:
+        boosted_scores: list[tuple[int, float]] = []
+        for idx in range(len(self._descriptions)):
+            score = float(scores[idx])
+            name_lower = self._tool_names[idx].lower()
+
+            for term in query_tokens:
+                if name_lower == term:
+                    score += 5
+                elif term in name_lower:
+                    score += 2
+
+            if score > 0:
+                boosted_scores.append((idx, score))
+
+        if not boosted_scores:
             query_terms = set(tokenized_query)
             overlaps = [
                 (idx, len(query_terms.intersection(tokens)))
                 for idx, tokens in enumerate(self._tokenized_descriptions)
             ]
-            ranked_indices = [
-                idx
-                for idx, overlap in sorted(overlaps, key=lambda item: item[1], reverse=True)
-                if overlap > 0
-            ]
+            boosted_scores = [(idx, float(overlap)) for idx, overlap in overlaps if overlap > 0]
+
+        boosted_scores.sort(key=lambda item: item[1], reverse=True)
 
         results = []
-        for idx in ranked_indices:
+        for idx, _score in boosted_scores:
             if len(results) >= n:
                 break
 
             doc = self._descriptions[idx]
             name = self._tool_names[idx]
-            snippet = doc.split("\n")[0][:120]
+            snippet = doc.split("\n")[0][:150]
             results.append(f"{name}: {snippet}")
 
         return results
@@ -116,13 +156,25 @@ class ToolRegistry:
         return name, doc
 
     def _rebuild_index(self) -> None:
-        self._tokenized_descriptions = [self._tokenize(desc) for desc in self._descriptions]
+        self._tokenized_descriptions = [
+            self._tokenize_with_settings(desc) for desc in self._descriptions
+        ]
         self._bm25 = BM25Okapi(self._tokenized_descriptions)
 
+    def _tokenize_with_settings(self, text: str) -> list[str]:
+        return self._tokenize(text, min_length=self._min_token_length, stopwords=self._stopwords)
+
     @staticmethod
-    def _tokenize(text: str) -> list[str]:
+    def _tokenize(
+        text: str,
+        *,
+        min_length: int = 2,
+        stopwords: frozenset[str] | None = None,
+    ) -> list[str]:
         text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
-        return re.findall(r"[a-z0-9]+", text.lower())
+        raw_tokens = re.findall(r"[a-z0-9]+", text.lower())
+        stops = stopwords if stopwords is not None else _DEFAULT_STOPWORDS
+        return [t for t in raw_tokens if len(t) >= min_length and t not in stops]
 
     def guess_categories(self, max_categories: int = 10) -> list[str]:
         """Derive category labels from tool names using meaningful name segments.

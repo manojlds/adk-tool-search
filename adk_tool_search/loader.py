@@ -90,6 +90,24 @@ def _session_key_from_context(context: Any) -> tuple[str, str] | None:
     return str(user_id), str(session_id)
 
 
+def _suggest_tool_names(requested_name: str, registry: ToolRegistry) -> list[str]:
+    """Suggest similar tool names when an exact match fails.
+
+    Returns up to 3 tool names whose lowercase form contains the
+    requested name (or vice-versa), prioritised by closeness of match.
+    """
+    requested_lower = requested_name.lower()
+    scored: list[tuple[str, int]] = []
+    for name in registry.tool_names:
+        name_lower = name.lower()
+        if requested_lower == name_lower:
+            continue
+        if requested_lower in name_lower or name_lower in requested_lower:
+            scored.append((name, -abs(len(name_lower) - len(requested_lower))))
+    scored.sort(key=lambda item: item[1])
+    return [name for name, _ in scored[:3]]
+
+
 def create_session_scoped_loader_callbacks(registry: ToolRegistry):
     """Create callbacks that load tools per session instead of globally.
 
@@ -227,7 +245,11 @@ def create_session_scoped_loader_callbacks_with_config(
         inline_args = args.get("args")
         new_tool = registry.get_tool(requested_name)
         if not new_tool:
-            return f"Error: Tool '{requested_name}' not found in registry."
+            suggestions = _suggest_tool_names(requested_name, registry)
+            msg = f"Error: Tool '{requested_name}' not found in registry."
+            if suggestions:
+                msg += f" Did you mean: {', '.join(suggestions)}?"
+            return msg
 
         loaded_names = _get_loaded_names_from_state(tool_context)
         already_loaded = requested_name in loaded_names
@@ -344,7 +366,11 @@ def create_search_and_load_tools(registry: ToolRegistry):
             if args and isinstance(args, dict):
                 return f"Tool '{tool_name}' found. Executing with provided args."
             return f"Tool '{tool_name}' load requested."
-        return f"Error: Tool '{tool_name}' not found in registry."
+        suggestions = _suggest_tool_names(tool_name, registry)
+        msg = f"Error: Tool '{tool_name}' not found in registry."
+        if suggestions:
+            msg += f" Did you mean: {', '.join(suggestions)}?"
+        return msg
 
     return search_tools, load_tool
 
