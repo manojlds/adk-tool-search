@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from google.adk.agents import Agent
@@ -10,14 +11,20 @@ from adk_tool_search.registry import ToolRegistry
 
 _SESSION_LOADED_TOOLS_STATE_KEY = "adk_tool_search.loaded_tools"
 
+_DEFAULT_ALLOWED_TOOL_FIELD_KEYS = ("allowed_tools", "allowed_tools_raw", "allowed-tools")
+_DEFAULT_AUTO_LOAD_TOOL_NAMES = {"use_skill"}
 
-def _extract_allowed_tool_tokens(tool_response: Any) -> list[str]:
+
+def _extract_allowed_tool_tokens(
+    tool_response: Any,
+    field_keys: tuple[str, ...] = _DEFAULT_ALLOWED_TOOL_FIELD_KEYS,
+) -> list[str]:
     """Extract allowed tool tokens from a skill tool response payload."""
     if not isinstance(tool_response, dict):
         return []
 
     allowed_tools_value: Any | None = None
-    for key in ("allowed_tools", "allowed_tools_raw", "allowed-tools"):
+    for key in field_keys:
         if key in tool_response:
             allowed_tools_value = tool_response[key]
             break
@@ -86,6 +93,40 @@ def create_session_scoped_loader_callbacks(registry: ToolRegistry):
         after_tool_callback: Handles load_tool and records loaded tools per session.
     """
 
+    return create_session_scoped_loader_callbacks_with_config(registry)
+
+
+def create_session_scoped_loader_callbacks_with_config(
+    registry: ToolRegistry,
+    *,
+    auto_load_from_tool_names: set[str] | None = None,
+    auto_load_field_keys: tuple[str, ...] = _DEFAULT_ALLOWED_TOOL_FIELD_KEYS,
+    auto_load_when: Callable[[str, dict[str, Any], Any], bool] | None = None,
+    allowed_tool_token_resolver: Callable[[list[str], ToolRegistry], tuple[set[str], list[str]]]
+    | None = None,
+):
+    """Create session-scoped callbacks with configurable auto-load behavior.
+
+    Args:
+        registry: Registry used to resolve and inject tool definitions.
+        auto_load_from_tool_names: Tool names eligible for response-based auto-loading.
+            Defaults to {"use_skill"}. Set to None for field-only behavior.
+        auto_load_field_keys: Ordered response field keys to inspect for allowed-tool tokens.
+        auto_load_when: Optional custom predicate
+            (tool_name, args, tool_response) -> bool.
+            If provided, takes precedence over ``auto_load_from_tool_names``.
+        allowed_tool_token_resolver: Optional custom resolver
+            (tokens, registry) -> (resolved_names, unresolved_tokens).
+
+    Returns:
+        before_model_callback, after_tool_callback
+    """
+    if auto_load_from_tool_names is None:
+        effective_tool_names: set[str] | None = None
+    else:
+        effective_tool_names = set(auto_load_from_tool_names)
+    token_resolver = allowed_tool_token_resolver or _resolve_allowed_tool_names
+
     def _as_base_tool(tool: Any) -> BaseTool | None:
         if isinstance(tool, BaseTool):
             return tool
@@ -138,6 +179,21 @@ def create_session_scoped_loader_callbacks(registry: ToolRegistry):
 
         return None
 
+    def _should_auto_load_from_response(tool_name: str, args: dict, tool_response: Any) -> bool:
+        if auto_load_when is not None:
+            return bool(auto_load_when(tool_name, args, tool_response))
+
+        if effective_tool_names is None:
+            return isinstance(tool_response, dict) and any(
+                key in tool_response for key in auto_load_field_keys
+            )
+
+        return (
+            tool_name in effective_tool_names
+            and isinstance(tool_response, dict)
+            and any(key in tool_response for key in auto_load_field_keys)
+        )
+
     async def after_tool_callback(
         tool: Any, args: dict, tool_context: Any, tool_response: Any
     ) -> Any:
@@ -167,12 +223,12 @@ def create_session_scoped_loader_callbacks(registry: ToolRegistry):
                 "You can call it directly."
             )
 
-        if tool_name == "use_skill":
-            tokens = _extract_allowed_tool_tokens(tool_response)
+        if _should_auto_load_from_response(tool_name, args, tool_response):
+            tokens = _extract_allowed_tool_tokens(tool_response, field_keys=auto_load_field_keys)
             if not tokens:
                 return None
 
-            resolved_names, unresolved_tokens = _resolve_allowed_tool_names(tokens, registry)
+            resolved_names, unresolved_tokens = token_resolver(tokens, registry)
             if not resolved_names and not unresolved_tokens:
                 return None
 
