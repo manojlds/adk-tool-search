@@ -40,6 +40,12 @@ This library reduces context usage by ~95% and keeps tool selection accurate acr
 
 Loaded tools are session-scoped. A tool loaded in one session is not exposed to other sessions.
 
+Persistence model:
+- Loaded tool names are written to ADK session state (`adk_tool_search.loaded_tools`) on `load_tool`.
+- `before_model_callback` reads that state and injects only those tools for the current session.
+- With persistent session services (SQLite/DB/Vertex), loaded tools survive process restarts.
+- With in-memory session services, restart continuity is not available.
+
 ## Install
 
 ```bash
