@@ -103,7 +103,6 @@ from adk_tool_search import (
     ToolRegistry,
     create_search_and_load_tools,
     create_session_scoped_loader_callbacks,
-    create_session_scoped_loader_callbacks_with_config,
 )
 
 def get_weather(location: str) -> dict:
@@ -213,28 +212,31 @@ Returns `(search_tools, load_tool)` — the two lightweight functions to give yo
 
 `load_tool` accepts an optional `args` dict for inline execution (see above).
 
-### `create_session_scoped_loader_callbacks(registry)`
+### `create_session_scoped_loader_callbacks(registry, *, auto_load_from_tool_names=..., auto_load_field_keys=..., auto_load_when=None, allowed_tool_token_resolver=None)`
 Returns `(before_model_callback, after_tool_callback)` that keep loaded tools scoped to each session.
 
-### `create_session_scoped_loader_callbacks_with_config(...)`
-Configurable variant of session-scoped callbacks for skills/tool interoperability:
-- `auto_load_from_tool_names`: set of tool names eligible for response-based auto-load (default: `{\"use_skill\"}`)
-- `auto_load_field_keys`: ordered response keys to inspect for allowed-tools tokens
+Keyword arguments for auto-load behavior:
+- `auto_load_from_tool_names`: set of tool names eligible for response-based auto-load (default: `{"use_skill"}`). Set to `None` for field-only mode (any tool response with matching fields triggers auto-load).
+- `auto_load_field_keys`: ordered response keys to inspect for allowed-tools tokens (default: `("allowed_tools", "allowed_tools_raw", "allowed-tools")`)
 - `auto_load_when`: optional predicate `(tool_name, args, tool_response) -> bool` (overrides name-based matching)
-- `allowed_tool_token_resolver`: optional custom token resolver
+- `allowed_tool_token_resolver`: optional custom token resolver `(tokens, registry) -> (resolved_names, unresolved_tokens)`
 
 Examples:
 
 ```python
-# Default strict mode (only use_skill responses can auto-load)
-before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks_with_config(
-    registry,
-)
+# Default mode (only use_skill responses can auto-load)
+before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks(registry)
 
 # Field-driven mode (any tool response containing allowed-tools fields)
-before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks_with_config(
+before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks(
     registry,
     auto_load_from_tool_names=None,
+)
+
+# Custom predicate
+before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks(
+    registry,
+    auto_load_when=lambda name, args, resp: name == "policy_router" and isinstance(resp, dict),
 )
 ```
 

@@ -108,27 +108,16 @@ def _suggest_tool_names(requested_name: str, registry: ToolRegistry) -> list[str
     return [name for name, _ in scored[:3]]
 
 
-def create_session_scoped_loader_callbacks(registry: ToolRegistry):
-    """Create callbacks that load tools per session instead of globally.
-
-    Returns:
-        before_model_callback: Injects previously loaded tools for current session.
-        after_tool_callback: Handles load_tool and records loaded tools per session.
-    """
-
-    return create_session_scoped_loader_callbacks_with_config(registry)
-
-
-def create_session_scoped_loader_callbacks_with_config(
+def create_session_scoped_loader_callbacks(
     registry: ToolRegistry,
     *,
-    auto_load_from_tool_names: set[str] | None = None,
+    auto_load_from_tool_names: set[str] | None = _DEFAULT_AUTO_LOAD_TOOL_NAMES,
     auto_load_field_keys: tuple[str, ...] = _DEFAULT_ALLOWED_TOOL_FIELD_KEYS,
     auto_load_when: Callable[[str, dict[str, Any], Any], bool] | None = None,
     allowed_tool_token_resolver: Callable[[list[str], ToolRegistry], tuple[set[str], list[str]]]
     | None = None,
 ):
-    """Create session-scoped callbacks with configurable auto-load behavior.
+    """Create session-scoped callbacks for tool loading and auto-discovery.
 
     Args:
         registry: Registry used to resolve and inject tool definitions.

@@ -13,7 +13,6 @@ from adk_tool_search.loader import (
     _suggest_tool_names,
     create_search_and_load_tools,
     create_session_scoped_loader_callbacks,
-    create_session_scoped_loader_callbacks_with_config,
     create_tool_search_agent,
 )
 
@@ -609,7 +608,7 @@ async def test_configurable_auto_load_custom_predicate_takes_precedence():
     def predicate(tool_name: str, args: dict, tool_response: dict | None) -> bool:
         return tool_name == "policy_router" and isinstance(tool_response, dict)
 
-    before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks_with_config(
+    before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks(
         registry,
         auto_load_from_tool_names={"use_skill"},
         auto_load_when=predicate,
@@ -648,7 +647,7 @@ async def test_configurable_auto_load_custom_resolver_is_used():
             return {"get_weather"}, []
         return set(), tokens
 
-    before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks_with_config(
+    before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks(
         registry,
         allowed_tool_token_resolver=resolver,
     )
