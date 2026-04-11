@@ -163,7 +163,7 @@ def create_session_scoped_loader_callbacks_with_config(
 
         existing_tool_names = set(getattr(llm_request, "tools_dict", {}).keys())
         tools_to_append: list[BaseTool] = []
-        for tool_name in loaded_names:
+        for tool_name in sorted(loaded_names):
             if tool_name in existing_tool_names:
                 continue
 
