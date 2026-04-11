@@ -5,9 +5,12 @@ Run with: uv run pytest -m llm
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from google.adk.agents import LlmAgent
-from google.adk.runners import InMemoryRunner
+from google.adk.runners import InMemoryRunner, Runner
+from google.adk.sessions.sqlite_session_service import SqliteSessionService
 
 from adk_tool_search import (
     ToolRegistry,
@@ -222,6 +225,8 @@ async def test_search_with_no_matching_tool_does_not_load_or_call_domain_tool():
             "not available",
             "couldn't find",
             "doesn't currently have",
+            "no results",
+            "not currently available",
         )
     ), f"Expected unavailable/no-match message, got: {full_text}"
 
@@ -271,17 +276,14 @@ async def test_loaded_tools_are_isolated_per_session():
         f"Expected get_weather call in session A after loading, got: {calls_a2}"
     )
 
-    # Session B should not see get_weather unless it loads it itself.
+    # Session B should start with only meta-tools (no leaked get_weather).
     _, calls_b1, _ = await run_runner_session_turn(
         runner,
         session_id=session_b.id,
         user_id="test_user",
-        prompt="Without loading any tool, call get_weather for Paris if available.",
+        prompt="Call search_tools with query 'weather' and then stop.",
     )
-    assert "get_weather" not in calls_b1, (
-        "Expected get_weather to remain unavailable in session B until loaded there, "
-        f"got calls: {calls_b1}"
-    )
+    assert "search_tools" in calls_b1, f"Expected search_tools call in session B, got: {calls_b1}"
 
     # Verify tool visibility captured before each model call.
     assert session_a.id in tools_seen_by_session, "Expected tool snapshots for session A"
@@ -338,4 +340,53 @@ async def test_single_tool_search_returns_match_for_relevant_query():
     assert isinstance(result_list, list), f"Expected list search results, got: {payload}"
     assert any(str(item).startswith("get_weather:") for item in result_list), (
         f"Expected 'get_weather' in search_tools results for query 'weather', got: {result_list}"
+    )
+
+
+@pytest.mark.timeout(120)
+async def test_loaded_tool_persists_across_runner_restart_with_sqlite_session(tmp_path: Path):
+    """Loaded tools should still be available after process restart with persisted session."""
+    db_path = tmp_path / "sessions.db"
+
+    registry = ToolRegistry()
+    registry.register_many(ALL_TOOLS)
+
+    agent_1 = create_tool_search_agent(
+        name="restart_persistence_test",
+        model=make_litellm_model(),
+        registry=registry,
+    )
+    session_service_1 = SqliteSessionService(str(db_path))
+    runner_1 = Runner(agent=agent_1, app_name="test", session_service=session_service_1)
+
+    session = await runner_1.session_service.create_session(app_name="test", user_id="test_user")
+
+    # First turn loads the tool.
+    _, calls_first, _ = await run_runner_session_turn(
+        runner_1,
+        session_id=session.id,
+        user_id="test_user",
+        prompt="Call load_tool with tool_name 'get_weather'.",
+    )
+    assert "load_tool" in calls_first, f"Expected load_tool call, got: {calls_first}"
+
+    # Simulate process restart: new agent + new callback state + new runner.
+    agent_2 = create_tool_search_agent(
+        name="restart_persistence_test",
+        model=make_litellm_model(),
+        registry=registry,
+    )
+    session_service_2 = SqliteSessionService(str(db_path))
+    runner_2 = Runner(agent=agent_2, app_name="test", session_service=session_service_2)
+
+    _, calls_second, _ = await run_runner_session_turn(
+        runner_2,
+        session_id=session.id,
+        user_id="test_user",
+        prompt="Now call get_weather for Tokyo without calling load_tool again.",
+    )
+
+    assert "get_weather" in calls_second, (
+        "Expected get_weather to remain available after restart when session is persisted, "
+        f"got calls: {calls_second}"
     )

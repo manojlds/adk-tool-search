@@ -8,6 +8,8 @@ from google.adk.tools.function_tool import FunctionTool
 
 from adk_tool_search.registry import ToolRegistry
 
+_SESSION_LOADED_TOOLS_STATE_KEY = "adk_tool_search.loaded_tools"
+
 
 def _session_key_from_context(context: Any) -> tuple[str, str] | None:
     """Extract a stable (user_id, session_id) key from ADK context objects."""
@@ -28,7 +30,6 @@ def create_session_scoped_loader_callbacks(registry: ToolRegistry):
         before_model_callback: Injects previously loaded tools for current session.
         after_tool_callback: Handles load_tool and records loaded tools per session.
     """
-    loaded_tools_by_session: dict[tuple[str, str], set[str]] = {}
 
     def _as_base_tool(tool: Any) -> BaseTool | None:
         if isinstance(tool, BaseTool):
@@ -37,12 +38,29 @@ def create_session_scoped_loader_callbacks(registry: ToolRegistry):
             return FunctionTool(tool)
         return None
 
+    def _get_loaded_names_from_state(context: Any) -> set[str]:
+        state = getattr(context, "state", None)
+        if state is None:
+            return set()
+
+        persisted = state.get(_SESSION_LOADED_TOOLS_STATE_KEY, [])
+        if not isinstance(persisted, list):
+            return set()
+
+        return {name for name in persisted if isinstance(name, str) and name}
+
+    def _set_loaded_names_in_state(context: Any, loaded_names: set[str]) -> None:
+        state = getattr(context, "state", None)
+        if state is not None:
+            state[_SESSION_LOADED_TOOLS_STATE_KEY] = sorted(loaded_names)
+
     async def before_model_callback(callback_context: Any, llm_request: Any) -> None:
         session_key = _session_key_from_context(callback_context)
         if session_key is None:
             return None
 
-        loaded_names = loaded_tools_by_session.get(session_key)
+        loaded_names = _get_loaded_names_from_state(callback_context)
+
         if not loaded_names:
             return None
 
@@ -82,11 +100,13 @@ def create_session_scoped_loader_callbacks(registry: ToolRegistry):
         if session_key is None:
             return "Error: Could not determine session context for tool loading."
 
-        loaded_names = loaded_tools_by_session.setdefault(session_key, set())
+        loaded_names = _get_loaded_names_from_state(tool_context)
         if requested_name in loaded_names:
             return f"Tool '{requested_name}' is already loaded and ready to use in this session."
 
         loaded_names.add(requested_name)
+        _set_loaded_names_in_state(tool_context, loaded_names)
+
         return (
             f"Tool '{requested_name}' is now loaded for this session and ready to use. "
             "You can call it directly."
