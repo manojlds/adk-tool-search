@@ -4,6 +4,8 @@ Dynamic tool search for Google ADK — load tools on demand instead of all at on
 
 Implements the [Anthropic Tool Search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool) pattern for Google's Agent Development Kit (ADK). Instead of loading all tool definitions into context upfront, the agent discovers and loads tools on demand using BM25 search.
 
+Primary integration target: standard ADK `LlmAgent` wiring with `ToolRegistry` + callbacks.
+
 ## Why?
 
 | Problem | Impact |
@@ -54,10 +56,17 @@ uv sync --all-extras
 
 ## Quick start
 
-### With plain Python functions
+### Recommended: use standard ADK `LlmAgent`
+
+#### With plain Python functions
 
 ```python
-from adk_tool_search import ToolRegistry, create_tool_search_agent
+from google.adk.agents import LlmAgent
+from adk_tool_search import (
+    ToolRegistry,
+    create_search_and_load_tools,
+    create_session_scoped_loader_callbacks,
+)
 
 def get_weather(location: str) -> dict:
     """Get current weather for a location."""
@@ -71,20 +80,33 @@ def send_email(to: str, subject: str, body: str) -> dict:
 registry = ToolRegistry()
 registry.register_many([get_weather, send_email])
 
-# 2. Create agent with dynamic search/load behavior
-agent = create_tool_search_agent(
+# 2. Create the lightweight discovery tools
+search_tools, load_tool = create_search_and_load_tools(registry)
+
+# 3. Create session-scoped loader callbacks
+before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+
+# 4. Wire into a normal ADK LlmAgent
+agent = LlmAgent(
     name="Assistant",
     model="gemini-2.5-flash",
-    registry=registry,
     instruction="Use search_tools to find tools, load_tool to activate them, then call them.",
+    tools=[search_tools, load_tool],
+    before_model_callback=before_model_callback,
+    after_tool_callback=after_tool_callback,
 )
 ```
 
-### With MCP servers
+#### With MCP servers
 
 ```python
+from google.adk.agents import LlmAgent
 from google.adk.tools.mcp import MCPToolset, StdioConnectionParams
-from adk_tool_search import ToolRegistry, create_tool_search_agent
+from adk_tool_search import (
+    ToolRegistry,
+    create_search_and_load_tools,
+    create_session_scoped_loader_callbacks,
+)
 
 # Fetch tools from MCP server (but don't give to agent)
 mcp = MCPToolset(connection_params=StdioConnectionParams(command="npx", args=["-y", "@modelcontextprotocol/server-github"]))
@@ -94,18 +116,24 @@ mcp_tools = await mcp.get_tools()
 registry = ToolRegistry()
 registry.register_many(mcp_tools)
 
-# Wire up the agent
-agent = create_tool_search_agent(
+# Create search/load tools + callbacks
+search_tools, load_tool = create_search_and_load_tools(registry)
+before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+
+# Wire up a normal ADK LlmAgent
+agent = LlmAgent(
     name="GitHubAssistant",
     model="gemini-2.5-flash",
-    registry=registry,
     instruction="Use search_tools to find tools, load_tool to activate them, then call them.",
+    tools=[search_tools, load_tool],
+    before_model_callback=before_model_callback,
+    after_tool_callback=after_tool_callback,
 )
 ```
 
-### Using the helper factory
+### Optional helper factory
 
-For convenience, `create_tool_search_agent` wraps the above into a single call:
+If you prefer less boilerplate, `create_tool_search_agent` wraps the above wiring:
 
 ```python
 from adk_tool_search import ToolRegistry, create_tool_search_agent
@@ -148,10 +176,8 @@ Returns `(search_tools, load_tool)` — the two lightweight functions to give yo
 ### `create_session_scoped_loader_callbacks(registry)`
 Returns `(before_model_callback, after_tool_callback)` that keep loaded tools scoped to each session.
 
-### `create_tool_search_agent(...)` (recommended)
-Use this for the default setup. It wires search/load tools and session-scoped callbacks automatically.
-
-### `create_tool_search_agent(...)`
+### `create_tool_search_agent(...)` (optional helper)
+Convenience wrapper around manual `LlmAgent` wiring.
 - `name`, `model` — Standard Agent params
 - `registry` — A populated `ToolRegistry`
 - `instruction` — Optional custom instruction
