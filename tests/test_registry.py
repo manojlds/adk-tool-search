@@ -63,6 +63,24 @@ class TestToolRegistry:
         results = registry.search("portfolio rebalance optimizer")
         assert results == []
 
+    def test_search_single_tool_registry_still_returns_relevant_match(self):
+        registry = ToolRegistry()
+        registry.register(sample_func_a)
+        results = registry.search("weather")
+        assert any("sample_func_a" in item for item in results)
+
+    def test_search_two_tool_registry_returns_relevant_match(self):
+        registry = ToolRegistry()
+        registry.register_many([sample_func_a, sample_func_b])
+        results = registry.search("weather")
+        assert any("sample_func_a" in item for item in results)
+
+    def test_search_matches_underscore_tool_names_with_space_query(self):
+        registry = ToolRegistry()
+        registry.register(sample_func_a)
+        results = registry.search("sample func")
+        assert any("sample_func_a" in item for item in results)
+
     def test_get_tool(self):
         registry = ToolRegistry()
         registry.register(sample_func_a)
