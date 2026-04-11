@@ -107,3 +107,100 @@ class TestToolRegistry:
         registry = ToolRegistry()
         with pytest.raises(TypeError):
             registry.register(42)
+
+    def test_register_many_skips_duplicates(self):
+        registry = ToolRegistry()
+        registry.register_many([sample_func_a, sample_func_b])
+        registry.register_many([sample_func_a, sample_func_b, sample_func_c])
+        assert registry.tool_count == 3
+
+    def test_register_many_with_no_new_tools_no_rebuild(self):
+        registry = ToolRegistry()
+        registry.register_many([sample_func_a, sample_func_b])
+        result = registry.search("weather")
+        assert len(result) > 0
+
+        registry.register_many([sample_func_a, sample_func_b])
+        assert registry.tool_count == 2
+
+    def test_tokenize_handles_camelcase(self):
+        tokens = ToolRegistry._tokenize("getPullRequest")
+        assert "pull" in tokens
+        assert "request" in tokens
+        assert "get" in tokens
+
+    def test_tokenize_handles_hyphens(self):
+        tokens = ToolRegistry._tokenize("browser-click-element")
+        assert "browser" in tokens
+        assert "click" in tokens
+        assert "element" in tokens
+
+    def test_tokenize_handles_underscores(self):
+        tokens = ToolRegistry._tokenize("get_weather_forecast")
+        assert "get" in tokens
+        assert "weather" in tokens
+        assert "forecast" in tokens
+
+    def test_guess_categories_empty_registry(self):
+        registry = ToolRegistry()
+        assert registry.guess_categories() == []
+
+    def test_guess_categories_excludes_action_verbs(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        registry = ToolRegistry()
+        registry.register(FakeTool("get_weather", "Get the weather"))
+        registry.register(FakeTool("list_issues", "List all issues"))
+        registry.register(FakeTool("create_branch", "Create a branch"))
+        registry.register(FakeTool("delete_file", "Delete a file"))
+
+        categories = registry.guess_categories()
+        action_verbs = {"get", "list", "create", "delete"}
+        for verb in action_verbs:
+            assert verb not in categories
+
+    def test_guess_categories_includes_noun_segments(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        registry = ToolRegistry()
+        registry.register(FakeTool("get_weather", "Get the weather forecast"))
+        registry.register(FakeTool("send_email", "Send an email"))
+        registry.register(FakeTool("search_issues", "Search GitHub issues"))
+
+        categories = registry.guess_categories()
+        assert "weather" in categories
+        assert "email" in categories
+        assert "issue" in categories or "issues" in categories
+
+    def test_guess_categories_max_categories(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        registry = ToolRegistry()
+        for i in range(20):
+            registry.register(FakeTool(f"tool_{chr(97 + i % 26)}_{i}", f"Tool {i}"))
+
+        categories = registry.guess_categories(max_categories=5)
+        assert len(categories) <= 5
+
+    def test_guess_categories_boosts_description_segments(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        registry = ToolRegistry()
+        registry.register(FakeTool("get_weather_report", "Get the weather forecast for a location"))
+        registry.register(FakeTool("list_weather_alerts", "List all weather alerts"))
+        registry.register(FakeTool("create_weather_summary", "Create a weather report"))
+
+        categories = registry.guess_categories()
+        assert "weather" in categories

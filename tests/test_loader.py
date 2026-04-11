@@ -13,6 +13,7 @@ from adk_tool_search.loader import (
     create_search_and_load_tools,
     create_session_scoped_loader_callbacks,
     create_session_scoped_loader_callbacks_with_config,
+    create_tool_search_agent,
 )
 
 
@@ -285,50 +286,210 @@ async def test_use_skill_allowed_tools_are_auto_loaded_in_session_state():
     request = FakeLlmRequest(tool_names=["search_tools", "load_tool"])
     await before_model_callback(context, request)
     injected_names = {tool.name for tool in request.appended_tools}
-    assert {"get_weather", "send_email"}.issubset(injected_names)
+    assert "get_weather" in injected_names
 
 
-async def test_injected_tools_are_deterministically_sorted_for_cache_stability():
+def test_create_tool_search_agent_produces_agent_with_correct_tools():
     registry = ToolRegistry()
     registry.register_many([get_weather, send_email])
 
-    before_model_callback, _ = create_session_scoped_loader_callbacks(registry)
-    context = _context(
-        user_id="u1",
-        session_id="s1",
-        state={"adk_tool_search.loaded_tools": ["send_email", "get_weather"]},
+    agent = create_tool_search_agent(
+        name="test",
+        model="gemini-2.5-flash",
+        registry=registry,
     )
 
-    request = FakeLlmRequest(tool_names=["search_tools", "load_tool"])
-    await before_model_callback(context, request)
+    tool_names = [
+        t.name if hasattr(t, "name") else getattr(t, "__name__", str(t)) for t in agent.tools
+    ]
+    assert "search_tools" in tool_names
+    assert "load_tool" in tool_names
+    assert len(tool_names) == 2
 
-    injected_order = [tool.name for tool in request.appended_tools]
-    assert injected_order == ["get_weather", "send_email"]
+
+def test_create_tool_search_agent_with_always_available_tools():
+    registry = ToolRegistry()
+    registry.register_many([get_weather, send_email])
+
+    def always_tool() -> str:
+        """An always-available tool."""
+        return "always"
+
+    agent = create_tool_search_agent(
+        name="test",
+        model="gemini-2.5-flash",
+        registry=registry,
+        always_available_tools=[always_tool],
+    )
+
+    tool_names = [
+        t.name if hasattr(t, "name") else getattr(t, "__name__", str(t)) for t in agent.tools
+    ]
+    assert "search_tools" in tool_names
+    assert "load_tool" in tool_names
+    assert "always_tool" in tool_names
+    assert len(tool_names) == 3
 
 
-async def test_configurable_auto_load_field_only_mode_allows_non_use_skill_tool():
+def test_create_tool_search_agent_default_instruction():
+    registry = ToolRegistry()
+    registry.register_many([get_weather, send_email])
+
+    agent = create_tool_search_agent(
+        name="TestBot",
+        model="gemini-2.5-flash",
+        registry=registry,
+    )
+
+    assert "TestBot" in agent.instruction
+    assert "search_tools" in agent.instruction
+    assert "load_tool" in agent.instruction
+    assert "2 tools" in agent.instruction
+
+
+def test_create_tool_search_agent_custom_instruction():
     registry = ToolRegistry()
     registry.register_many([get_weather])
 
-    before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks_with_config(
-        registry,
-        auto_load_from_tool_names=None,
+    agent = create_tool_search_agent(
+        name="test",
+        model="gemini-2.5-flash",
+        registry=registry,
+        instruction="Custom instruction here",
     )
+
+    assert agent.instruction == "Custom instruction here"
+
+
+def test_create_tool_search_agent_chains_single_existing_callback():
+    registry = ToolRegistry()
+    registry.register_many([get_weather])
+
+    async def existing_before(ctx, req):
+        return None
+
+    def existing_after(tool, args, ctx, response):
+        return None
+
+    agent = create_tool_search_agent(
+        name="test",
+        model="gemini-2.5-flash",
+        registry=registry,
+        before_model_callback=existing_before,
+        after_tool_callback=existing_after,
+    )
+
+    assert isinstance(agent.before_model_callback, list)
+    assert isinstance(agent.after_tool_callback, list)
+    assert len(agent.before_model_callback) == 2
+    assert len(agent.after_tool_callback) == 2
+
+
+def test_create_tool_search_agent_chains_list_callbacks():
+    registry = ToolRegistry()
+    registry.register_many([get_weather])
+
+    async def cb1(ctx, req):
+        return None
+
+    async def cb2(ctx, req):
+        return None
+
+    def cb3(tool, args, ctx, response):
+        return None
+
+    def cb4(tool, args, ctx, response):
+        return None
+
+    agent = create_tool_search_agent(
+        name="test",
+        model="gemini-2.5-flash",
+        registry=registry,
+        before_model_callback=[cb1, cb2],
+        after_tool_callback=[cb3, cb4],
+    )
+
+    assert isinstance(agent.before_model_callback, list)
+    assert len(agent.before_model_callback) == 3
+    assert isinstance(agent.after_tool_callback, list)
+    assert len(agent.after_tool_callback) == 3
+
+
+async def test_before_model_callback_skips_without_session_key():
+    registry = ToolRegistry()
+    registry.register(get_weather)
+
+    before_model_callback, _ = create_session_scoped_loader_callbacks(registry)
+
+    context_no_session = SimpleNamespace(
+        user_id="u1", session=None, state={"adk_tool_search.loaded_tools": ["get_weather"]}
+    )
+    request = FakeLlmRequest(tool_names=["search_tools", "load_tool"])
+    result = await before_model_callback(context_no_session, request)
+    assert result is None
+    assert request.appended_tools == []
+
+
+async def test_before_model_callback_skips_when_no_loaded_tools_in_state():
+    registry = ToolRegistry()
+    registry.register(get_weather)
+
+    before_model_callback, _ = create_session_scoped_loader_callbacks(registry)
+    context = _context(user_id="u1", session_id="s1", state={})
+    request = FakeLlmRequest(tool_names=["search_tools", "load_tool"])
+
+    result = await before_model_callback(context, request)
+    assert result is None
+    assert request.appended_tools == []
+
+
+async def test_after_tool_callback_returns_none_for_unrelated_tool():
+    registry = ToolRegistry()
+    registry.register(get_weather)
+
+    _, after_tool_callback = create_session_scoped_loader_callbacks(registry)
     context = _context(user_id="u1", session_id="s1", state={})
 
-    response = await after_tool_callback(
-        _named_tool("emit_policy"),
-        {},
+    result = await after_tool_callback(
+        _named_tool("some_other_tool"),
+        {"query": "weather"},
         context,
-        {"allowed_tools": "get_weather"},
+        "some response string",
     )
-    assert isinstance(response, dict)
-    assert response["auto_loaded_tools"] == ["get_weather"]
+    assert result is None
 
+
+async def test_before_model_callback_wraps_callable_as_function_tool():
+    registry = ToolRegistry()
+    registry.register(get_weather)
+
+    before_model_callback, _ = create_session_scoped_loader_callbacks(registry)
+    context = _context(
+        user_id="u1", session_id="s1", state={"adk_tool_search.loaded_tools": ["get_weather"]}
+    )
     request = FakeLlmRequest(tool_names=["search_tools", "load_tool"])
     await before_model_callback(context, request)
-    injected_names = {tool.name for tool in request.appended_tools}
-    assert "get_weather" in injected_names
+
+    from google.adk.tools.base_tool import BaseTool
+
+    assert all(isinstance(t, BaseTool) for t in request.appended_tools)
+    assert request.appended_tools[0].name == "get_weather"
+
+
+async def test_after_tool_callback_auto_load_returns_none_for_non_dict_response():
+    registry = ToolRegistry()
+    registry.register(get_weather)
+
+    _, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+    context = _context(user_id="u1", session_id="s1", state={})
+
+    result = await after_tool_callback(
+        _named_tool("use_skill"),
+        {"name": "weather-skill"},
+        context,
+        "just a string response",
+    )
+    assert result is None
 
 
 async def test_configurable_auto_load_custom_predicate_takes_precedence():

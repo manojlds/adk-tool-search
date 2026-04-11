@@ -121,4 +121,98 @@ class ToolRegistry:
 
     @staticmethod
     def _tokenize(text: str) -> list[str]:
+        text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
         return re.findall(r"[a-z0-9]+", text.lower())
+
+    def guess_categories(self, max_categories: int = 10) -> list[str]:
+        """Derive category labels from tool names using meaningful name segments.
+
+        Extracts the most significant noun-like segments from tool names.
+        For example, from ``browser_navigate``, ``browser_click``,
+        ``get_file_contents``, ``list_issues`` extracts ``browser``,
+        ``file``, ``issue`` rather than just ``browser``, ``get``, ``list``.
+
+        Uses description text to prefer segments that appear in descriptions,
+        since those are more likely to represent meaningful domain concepts.
+        """
+        if not self._tool_names:
+            return []
+
+        all_segments: dict[str, int] = {}
+        segment_in_description: dict[str, int] = {}
+
+        for idx, name in enumerate(self._tool_names):
+            split = re.sub(r"([a-z])([A-Z])", r"\1 \2", name)
+            parts = re.split(r"[_\-]", split)
+            description = self._descriptions[idx].lower() if idx < len(self._descriptions) else ""
+
+            for part in parts:
+                token = part.lower().strip()
+                if len(token) <= 1:
+                    continue
+                all_segments[token] = all_segments.get(token, 0) + 1
+                if token in description:
+                    segment_in_description[token] = segment_in_description.get(token, 0) + 1
+
+        action_verbs = {
+            "get",
+            "list",
+            "create",
+            "update",
+            "delete",
+            "add",
+            "remove",
+            "search",
+            "find",
+            "set",
+            "manage",
+            "handle",
+            "run",
+            "send",
+            "read",
+            "write",
+            "push",
+            "pull",
+            "merge",
+            "fork",
+            "star",
+            "unstar",
+            "dismiss",
+            "mark",
+            "assign",
+            "request",
+            "enable",
+            "take",
+            "save",
+            "start",
+            "stop",
+            "resume",
+            "close",
+            "open",
+            "click",
+            "type",
+            "hover",
+            "drag",
+            "fill",
+            "press",
+            "select",
+            "navigate",
+            "snapshot",
+            "evaluate",
+            "verify",
+            "generate",
+            "trigger",
+            "clear",
+            "upload",
+        }
+
+        scored: list[tuple[str, float]] = []
+        for segment, count in all_segments.items():
+            if segment in action_verbs:
+                continue
+            desc_boost = segment_in_description.get(segment, 0) * 2
+            score = count + desc_boost
+            scored.append((segment, score))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [segment for segment, _ in scored[:max_categories]]
