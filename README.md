@@ -30,10 +30,13 @@ This library reduces context usage by ~95% and keeps tool selection accurate acr
 │  1. Agent calls search_tools("weather forecast")    │
 │  2. Registry returns top-5 matches (name + snippet) │
 │  3. Agent calls load_tool("get_forecast")           │
-│  4. after_tool_callback injects tool into agent     │
-│  5. Agent calls get_forecast(location="Tokyo")      │
+│  4. Tool is marked loaded for this session           │
+│  5. before_model_callback injects it next turn       │
+│  6. Agent calls get_forecast(location="Tokyo")      │
 └─────────────────────────────────────────────────────┘
 ```
+
+Loaded tools are session-scoped. A tool loaded in one session is not exposed to other sessions.
 
 ## Install
 
@@ -135,7 +138,7 @@ GITHUB_TOKEN=ghp_... uv run python examples/mcp_demo.py
 ### `ToolRegistry`
 - `register(tool)` — Register a single tool (function, ADK tool, or MCP tool)
 - `register_many(tools)` — Register multiple tools (rebuilds index once)
-- `search(query, n=5)` — BM25 search, returns `["name: snippet", ...]`
+- `search(query, n=5)` — BM25-first search with lexical fallback for tiny registries, returns `["name: snippet", ...]`
 - `get_tool(name)` — Get tool object by exact name
 - `tool_count` / `tool_names` — Introspection properties
 
@@ -145,7 +148,10 @@ Returns `(search_tools, load_tool)` — the two lightweight functions to give yo
 ### `create_session_scoped_loader_callbacks(registry)`
 Returns `(before_model_callback, after_tool_callback)` that keep loaded tools scoped to each session.
 
-### `create_tool_search_agent(...)` (helper)
+### `create_tool_search_agent(...)` (recommended)
+Use this for the default setup. It wires search/load tools and session-scoped callbacks automatically.
+
+### `create_tool_search_agent(...)`
 - `name`, `model` — Standard Agent params
 - `registry` — A populated `ToolRegistry`
 - `instruction` — Optional custom instruction
