@@ -46,6 +46,13 @@ Persistence model:
 - With persistent session services (SQLite/DB/Vertex), loaded tools survive process restarts.
 - With in-memory session services, restart continuity is not available.
 
+Skills integration:
+- If a `use_skill` tool call returns `allowed_tools` (or `allowed_tools_raw` / `allowed-tools`),
+  `adk-tool-search` auto-loads matching registry tools into the same session state.
+- This keeps skill-required tools deferred by default and activates them only when the skill is activated.
+- Supported token forms include plain names (for example, `get_weather`) and function-like tokens
+  (for example, `Bash(git:*)`, resolved by base name when possible).
+
 ## Install
 
 ```bash

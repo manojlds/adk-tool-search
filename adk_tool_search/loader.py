@@ -11,6 +11,62 @@ from adk_tool_search.registry import ToolRegistry
 _SESSION_LOADED_TOOLS_STATE_KEY = "adk_tool_search.loaded_tools"
 
 
+def _extract_allowed_tool_tokens(tool_response: Any) -> list[str]:
+    """Extract allowed tool tokens from a skill tool response payload."""
+    if not isinstance(tool_response, dict):
+        return []
+
+    allowed_tools = tool_response.get("allowed_tools")
+    if isinstance(allowed_tools, list):
+        return [
+            token.strip() for token in allowed_tools if isinstance(token, str) and token.strip()
+        ]
+    if isinstance(allowed_tools, str):
+        return [token.strip() for token in allowed_tools.split() if token.strip()]
+
+    allowed_tools_raw = tool_response.get("allowed_tools_raw")
+    if isinstance(allowed_tools_raw, str):
+        return [token.strip() for token in allowed_tools_raw.split() if token.strip()]
+
+    allowed_tools_kebab = tool_response.get("allowed-tools")
+    if isinstance(allowed_tools_kebab, str):
+        return [token.strip() for token in allowed_tools_kebab.split() if token.strip()]
+
+    return []
+
+
+def _resolve_allowed_tool_names(
+    tokens: list[str],
+    registry: ToolRegistry,
+) -> tuple[set[str], list[str]]:
+    """Resolve allowed-tools tokens into concrete registry tool names."""
+    resolved: set[str] = set()
+    unresolved: list[str] = []
+
+    for token in tokens:
+        base = token.split("(", 1)[0].strip()
+        candidates: list[str] = []
+        for value in (token, base):
+            if not value:
+                continue
+            candidates.extend(
+                [value, value.lower(), value.replace("-", "_"), value.lower().replace("-", "_")]
+            )
+
+        matched_name: str | None = None
+        for candidate in candidates:
+            if registry.get_tool(candidate) is not None:
+                matched_name = candidate
+                break
+
+        if matched_name is None:
+            unresolved.append(token)
+        else:
+            resolved.add(matched_name)
+
+    return resolved, unresolved
+
+
 def _session_key_from_context(context: Any) -> tuple[str, str] | None:
     """Extract a stable (user_id, session_id) key from ADK context objects."""
     user_id = getattr(context, "user_id", None)
@@ -88,29 +144,53 @@ def create_session_scoped_loader_callbacks(registry: ToolRegistry):
     ) -> Any:
         tool_name = getattr(tool, "name", getattr(tool, "__name__", str(tool)))
 
-        if tool_name != "load_tool":
-            return None
-
-        requested_name = args.get("tool_name", "")
-        new_tool = registry.get_tool(requested_name)
-        if not new_tool:
-            return f"Error: Tool '{requested_name}' not found in registry."
-
         session_key = _session_key_from_context(tool_context)
         if session_key is None:
             return "Error: Could not determine session context for tool loading."
 
-        loaded_names = _get_loaded_names_from_state(tool_context)
-        if requested_name in loaded_names:
-            return f"Tool '{requested_name}' is already loaded and ready to use in this session."
+        if tool_name == "load_tool":
+            requested_name = args.get("tool_name", "")
+            new_tool = registry.get_tool(requested_name)
+            if not new_tool:
+                return f"Error: Tool '{requested_name}' not found in registry."
 
-        loaded_names.add(requested_name)
-        _set_loaded_names_in_state(tool_context, loaded_names)
+            loaded_names = _get_loaded_names_from_state(tool_context)
+            if requested_name in loaded_names:
+                return (
+                    f"Tool '{requested_name}' is already loaded and ready to use in this session."
+                )
 
-        return (
-            f"Tool '{requested_name}' is now loaded for this session and ready to use. "
-            "You can call it directly."
-        )
+            loaded_names.add(requested_name)
+            _set_loaded_names_in_state(tool_context, loaded_names)
+
+            return (
+                f"Tool '{requested_name}' is now loaded for this session and ready to use. "
+                "You can call it directly."
+            )
+
+        if tool_name == "use_skill":
+            tokens = _extract_allowed_tool_tokens(tool_response)
+            if not tokens:
+                return None
+
+            resolved_names, unresolved_tokens = _resolve_allowed_tool_names(tokens, registry)
+            if not resolved_names and not unresolved_tokens:
+                return None
+
+            loaded_names = _get_loaded_names_from_state(tool_context)
+            loaded_names.update(resolved_names)
+            _set_loaded_names_in_state(tool_context, loaded_names)
+
+            if not isinstance(tool_response, dict):
+                return None
+
+            enhanced_response = dict(tool_response)
+            enhanced_response["auto_loaded_tools"] = sorted(resolved_names)
+            if unresolved_tokens:
+                enhanced_response["unresolved_allowed_tools"] = unresolved_tokens
+            return enhanced_response
+
+        return None
 
     return before_model_callback, after_tool_callback
 

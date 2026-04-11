@@ -8,6 +8,8 @@ from google.adk.tools.base_tool import BaseTool
 
 from adk_tool_search import ToolRegistry
 from adk_tool_search.loader import (
+    _extract_allowed_tool_tokens,
+    _resolve_allowed_tool_names,
     create_search_and_load_tools,
     create_session_scoped_loader_callbacks,
 )
@@ -207,3 +209,65 @@ async def test_callbacks_require_session_state_for_persistence_and_injection():
     request = FakeLlmRequest(tool_names=["search_tools", "load_tool"])
     await before_model_callback(_context_without_state(user_id="u1", session_id="s1"), request)
     assert request.appended_tools == []
+
+
+def test_extract_allowed_tool_tokens_variants():
+    assert _extract_allowed_tool_tokens({"allowed_tools": ["get_weather", "send_email"]}) == [
+        "get_weather",
+        "send_email",
+    ]
+    assert _extract_allowed_tool_tokens({"allowed_tools": "get_weather send_email"}) == [
+        "get_weather",
+        "send_email",
+    ]
+    assert _extract_allowed_tool_tokens({"allowed_tools_raw": "get_weather send_email"}) == [
+        "get_weather",
+        "send_email",
+    ]
+    assert _extract_allowed_tool_tokens({"allowed-tools": "get_weather send_email"}) == [
+        "get_weather",
+        "send_email",
+    ]
+
+
+def test_resolve_allowed_tool_names_with_token_variants():
+    registry = ToolRegistry()
+    registry.register_many([get_weather, send_email])
+
+    resolved, unresolved = _resolve_allowed_tool_names(
+        ["get_weather", "send-email", "Bash(git:*)"],
+        registry,
+    )
+
+    assert "get_weather" in resolved
+    assert "send_email" in resolved
+    assert "Bash(git:*)" in unresolved
+
+
+async def test_use_skill_allowed_tools_are_auto_loaded_in_session_state():
+    registry = ToolRegistry()
+    registry.register_many([get_weather, send_email])
+
+    before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+    context = _context(user_id="u1", session_id="s1", state={})
+
+    skill_payload = {
+        "skill_name": "weather-skill",
+        "allowed_tools": "get_weather send-email Bash(git:*)",
+    }
+
+    override_response = await after_tool_callback(
+        _named_tool("use_skill"),
+        {"name": "weather-skill"},
+        context,
+        skill_payload,
+    )
+
+    assert isinstance(override_response, dict)
+    assert override_response["auto_loaded_tools"] == ["get_weather", "send_email"]
+    assert "Bash(git:*)" in override_response["unresolved_allowed_tools"]
+
+    request = FakeLlmRequest(tool_names=["search_tools", "load_tool"])
+    await before_model_callback(context, request)
+    injected_names = {tool.name for tool in request.appended_tools}
+    assert {"get_weather", "send_email"}.issubset(injected_names)
