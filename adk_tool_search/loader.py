@@ -16,21 +16,20 @@ def _extract_allowed_tool_tokens(tool_response: Any) -> list[str]:
     if not isinstance(tool_response, dict):
         return []
 
-    allowed_tools = tool_response.get("allowed_tools")
-    if isinstance(allowed_tools, list):
+    allowed_tools_value: Any | None = None
+    for key in ("allowed_tools", "allowed_tools_raw", "allowed-tools"):
+        if key in tool_response:
+            allowed_tools_value = tool_response[key]
+            break
+
+    if isinstance(allowed_tools_value, list):
         return [
-            token.strip() for token in allowed_tools if isinstance(token, str) and token.strip()
+            token.strip()
+            for token in allowed_tools_value
+            if isinstance(token, str) and token.strip()
         ]
-    if isinstance(allowed_tools, str):
-        return [token.strip() for token in allowed_tools.split() if token.strip()]
-
-    allowed_tools_raw = tool_response.get("allowed_tools_raw")
-    if isinstance(allowed_tools_raw, str):
-        return [token.strip() for token in allowed_tools_raw.split() if token.strip()]
-
-    allowed_tools_kebab = tool_response.get("allowed-tools")
-    if isinstance(allowed_tools_kebab, str):
-        return [token.strip() for token in allowed_tools_kebab.split() if token.strip()]
+    if isinstance(allowed_tools_value, str):
+        return [token.strip() for token in allowed_tools_value.split() if token.strip()]
 
     return []
 
