@@ -7,11 +7,10 @@ from __future__ import annotations
 
 import pytest
 from google.adk.agents import LlmAgent
+from google.adk.runners import InMemoryRunner
 
 from adk_tool_search import (
     ToolRegistry,
-    create_dynamic_loader_callback,
-    create_search_and_load_tools,
     create_tool_search_agent,
 )
 from tests.conftest import (
@@ -19,6 +18,7 @@ from tests.conftest import (
     run_agent,
     run_agent_with_call_args,
     run_agent_with_payloads,
+    run_runner_session_turn,
 )
 
 pytestmark = [pytest.mark.llm]
@@ -89,13 +89,10 @@ def _make_agent() -> LlmAgent:
     registry = ToolRegistry()
     registry.register_many(ALL_TOOLS)
 
-    search_tools, load_tool = create_search_and_load_tools(registry)
-    agent_ref: list[LlmAgent] = []
-    callback = create_dynamic_loader_callback(registry, agent_ref)
-
-    agent = LlmAgent(
+    return create_tool_search_agent(
         name="test_agent",
         model=make_litellm_model(),
+        registry=registry,
         instruction=(
             "You are a helpful assistant with a library of tools.\n"
             "You start with only search_tools and load_tool.\n"
@@ -104,11 +101,7 @@ def _make_agent() -> LlmAgent:
             "2. Call load_tool with the exact tool name from the results\n"
             "3. Then call the loaded tool directly\n"
         ),
-        tools=[search_tools, load_tool],
-        after_tool_callback=callback,
     )
-    agent_ref.append(agent)
-    return agent
 
 
 @pytest.mark.timeout(120)
@@ -222,3 +215,79 @@ async def test_search_with_no_matching_tool_does_not_load_or_call_domain_tool():
     assert any(
         word in full_text for word in ("unavailable", "not found", "no tools", "no matching")
     ), f"Expected unavailable/no-match message, got: {full_text}"
+
+
+@pytest.mark.timeout(120)
+async def test_loaded_tools_are_isolated_per_session():
+    """A tool loaded in one session should not leak into another session."""
+    registry = ToolRegistry()
+    registry.register_many(ALL_TOOLS)
+
+    tools_seen_by_session: dict[str, list[set[str]]] = {}
+
+    async def capture_tools_before_model(callback_context, llm_request):
+        session_id = callback_context.session.id
+        tool_names = set(getattr(llm_request, "tools_dict", {}).keys())
+        tools_seen_by_session.setdefault(session_id, []).append(tool_names)
+        return None
+
+    agent = create_tool_search_agent(
+        name="session_isolation_test",
+        model=make_litellm_model(),
+        registry=registry,
+        before_model_callback=capture_tools_before_model,
+    )
+
+    runner = InMemoryRunner(agent=agent, app_name="test")
+    session_a = await runner.session_service.create_session(app_name="test", user_id="test_user")
+    session_b = await runner.session_service.create_session(app_name="test", user_id="test_user")
+
+    # Session A explicitly loads get_weather.
+    _, calls_a1, _ = await run_runner_session_turn(
+        runner,
+        session_id=session_a.id,
+        user_id="test_user",
+        prompt="Call load_tool with tool_name 'get_weather'.",
+    )
+    assert "load_tool" in calls_a1, f"Expected load_tool call in session A, got: {calls_a1}"
+
+    # Next turn in session A should have get_weather available.
+    _, calls_a2, _ = await run_runner_session_turn(
+        runner,
+        session_id=session_a.id,
+        user_id="test_user",
+        prompt="Now call get_weather for Tokyo.",
+    )
+    assert "get_weather" in calls_a2, (
+        f"Expected get_weather call in session A after loading, got: {calls_a2}"
+    )
+
+    # Session B should not see get_weather unless it loads it itself.
+    _, calls_b1, _ = await run_runner_session_turn(
+        runner,
+        session_id=session_b.id,
+        user_id="test_user",
+        prompt="Without loading any tool, call get_weather for Paris if available.",
+    )
+    assert "get_weather" not in calls_b1, (
+        "Expected get_weather to remain unavailable in session B until loaded there, "
+        f"got calls: {calls_b1}"
+    )
+
+    # Verify tool visibility captured before each model call.
+    assert session_a.id in tools_seen_by_session, "Expected tool snapshots for session A"
+    assert session_b.id in tools_seen_by_session, "Expected tool snapshots for session B"
+
+    first_tools_a = tools_seen_by_session[session_a.id][0]
+    assert first_tools_a == {"search_tools", "load_tool"}, (
+        f"Expected only meta-tools at start of session A, got: {first_tools_a}"
+    )
+
+    assert any("get_weather" in names for names in tools_seen_by_session[session_a.id]), (
+        "Expected get_weather to be injected for session A after load_tool"
+    )
+
+    first_tools_b = tools_seen_by_session[session_b.id][0]
+    assert first_tools_b == {"search_tools", "load_tool"}, (
+        f"Expected only meta-tools at start of session B, got: {first_tools_b}"
+    )

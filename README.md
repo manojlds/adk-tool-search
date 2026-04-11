@@ -131,6 +131,9 @@ agent = create_tool_search_agent(
     model="gemini-2.5-flash",
     registry=registry,
 )
+
+# Tools loaded via load_tool are session-scoped.
+# A tool loaded in one session is not visible to other sessions unless they load it too.
 ```
 
 ## Examples
