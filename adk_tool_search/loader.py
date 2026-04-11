@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -8,6 +10,8 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.function_tool import FunctionTool
 
 from adk_tool_search.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 _SESSION_LOADED_TOOLS_STATE_KEY = "adk_tool_search.loaded_tools"
 
@@ -195,6 +199,29 @@ def create_session_scoped_loader_callbacks_with_config(
             and any(key in tool_response for key in auto_load_field_keys)
         )
 
+    async def _execute_tool_inline(tool: Any, tool_args: dict, tool_context: Any) -> Any:
+        base_tool = _as_base_tool(tool)
+        if base_tool is not None:
+            try:
+                return await base_tool.run_async(args=tool_args, tool_context=tool_context)
+            except Exception:
+                logger.debug(
+                    "Inline execution via run_async failed for %s", getattr(tool, "name", tool)
+                )
+                return None
+        if callable(tool):
+            try:
+                result = tool(**tool_args)
+                if asyncio.iscoroutine(result):
+                    result = await result
+                return result
+            except Exception:
+                logger.debug(
+                    "Inline execution of callable failed for %s", getattr(tool, "__name__", tool)
+                )
+                return None
+        return None
+
     async def after_tool_callback(
         tool: Any, args: dict, tool_context: Any, tool_response: Any
     ) -> Any:
@@ -206,12 +233,49 @@ def create_session_scoped_loader_callbacks_with_config(
 
         if tool_name == "load_tool":
             requested_name = args.get("tool_name", "")
+            inline_args = args.get("args")
             new_tool = registry.get_tool(requested_name)
             if not new_tool:
                 return f"Error: Tool '{requested_name}' not found in registry."
 
             loaded_names = _get_loaded_names_from_state(tool_context)
-            if requested_name in loaded_names:
+            already_loaded = requested_name in loaded_names
+
+            if inline_args and isinstance(inline_args, dict):
+                loaded_names.add(requested_name)
+                _set_loaded_names_in_state(tool_context, loaded_names)
+
+                if already_loaded:
+                    result = await _execute_tool_inline(new_tool, inline_args, tool_context)
+                    if result is not None:
+                        return {
+                            "loaded_tool": requested_name,
+                            "already_loaded": True,
+                            "result": result,
+                        }
+                    return {
+                        "loaded_tool": requested_name,
+                        "already_loaded": True,
+                        "message": (
+                            f"Tool '{requested_name}' is already loaded. Call it directly next turn."
+                        ),
+                    }
+                result = await _execute_tool_inline(new_tool, inline_args, tool_context)
+                if result is not None:
+                    return {
+                        "loaded_tool": requested_name,
+                        "result": result,
+                    }
+                return {
+                    "loaded_tool": requested_name,
+                    "message": (
+                        f"Tool '{requested_name}' is now loaded for this session. "
+                        f"Inline execution not available for this tool type — "
+                        f"call it directly on your next turn."
+                    ),
+                }
+
+            if already_loaded:
                 return (
                     f"Tool '{requested_name}' is already loaded and ready to use in this session."
                 )
@@ -221,7 +285,7 @@ def create_session_scoped_loader_callbacks_with_config(
 
             return (
                 f"Tool '{requested_name}' is now loaded for this session and ready to use. "
-                "You can call it directly."
+                "You can call it directly on your next turn."
             )
 
         if _should_auto_load_from_response(tool_name, args, tool_response):
@@ -265,16 +329,21 @@ def create_search_and_load_tools(registry: ToolRegistry):
         """
         return registry.search(query, n=5)
 
-    def load_tool(tool_name: str) -> str:
+    def load_tool(tool_name: str, args: dict | None = None) -> str:
         """Load a tool into your active toolkit so you can use it.
 
-        Call this after finding a tool with search_tools.
+        If args are provided, the tool will be loaded AND executed immediately,
+        returning the tool's result directly in one turn. If omitted, the tool
+        is loaded for use on subsequent turns.
 
         Args:
             tool_name: The exact tool name from search_tools results.
+            args: Optional keyword arguments to pass to the tool for immediate execution.
         """
         tool = registry.get_tool(tool_name)
         if tool:
+            if args and isinstance(args, dict):
+                return f"Tool '{tool_name}' found. Executing with provided args."
             return f"Tool '{tool_name}' load requested."
         return f"Error: Tool '{tool_name}' not found in registry."
 
@@ -325,7 +394,8 @@ def create_tool_search_agent(
         "When you need to perform an action:\n"
         "1. Call search_tools with keywords describing what you need\n"
         "2. Call load_tool with the exact tool name from the results\n"
-        "3. Then call the loaded tool directly\n\n"
+        "   - Pass 'args' to execute the tool immediately (one-shot)\n"
+        "   - Omit 'args' to load it for use on subsequent turns\n\n"
         f"Available tool categories: {', '.join(_guess_categories(registry))}"
     )
 

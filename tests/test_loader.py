@@ -75,6 +75,115 @@ def test_create_search_and_load_tools_smoke():
     assert "load requested" in load_tool("get_weather")
     assert "not found" in load_tool("unknown_tool")
 
+    assert "Executing with provided args" in load_tool("get_weather", args={"location": "Tokyo"})
+    assert "not found" in load_tool("unknown_tool", args={"x": 1})
+
+
+async def test_inline_execution_runs_tool_via_callback():
+    registry = ToolRegistry()
+    registry.register(get_weather)
+
+    _, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+    context = _context(user_id="u1", session_id="s1", state={})
+
+    result = await after_tool_callback(
+        _named_tool("load_tool"),
+        {"tool_name": "get_weather", "args": {"location": "Tokyo"}},
+        context,
+        None,
+    )
+
+    assert isinstance(result, dict)
+    assert result["loaded_tool"] == "get_weather"
+    assert "result" in result
+    assert result["result"]["location"] == "Tokyo"
+    assert "adk_tool_search.loaded_tools" in context.state
+    assert "get_weather" in context.state["adk_tool_search.loaded_tools"]
+
+
+async def test_inline_execution_already_loaded():
+    registry = ToolRegistry()
+    registry.register(get_weather)
+
+    _, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+    context = _context(
+        user_id="u1", session_id="s1", state={"adk_tool_search.loaded_tools": ["get_weather"]}
+    )
+
+    result = await after_tool_callback(
+        _named_tool("load_tool"),
+        {"tool_name": "get_weather", "args": {"location": "Tokyo"}},
+        context,
+        None,
+    )
+
+    assert isinstance(result, dict)
+    assert result["loaded_tool"] == "get_weather"
+    assert result.get("already_loaded") is True
+    assert "result" in result
+    assert result["result"]["location"] == "Tokyo"
+
+
+async def test_inline_execution_loads_without_args():
+    registry = ToolRegistry()
+    registry.register(get_weather)
+
+    _, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+    context = _context(user_id="u1", session_id="s1", state={})
+
+    result = await after_tool_callback(
+        _named_tool("load_tool"),
+        {"tool_name": "get_weather"},
+        context,
+        None,
+    )
+
+    assert isinstance(result, str)
+    assert "now loaded" in result
+    assert "next turn" in result
+    assert "get_weather" in context.state["adk_tool_search.loaded_tools"]
+
+
+async def test_inline_execution_with_non_callable_tool():
+    class FakeMCPTool:
+        name = "mcp_tool"
+        description = "A fake MCP tool"
+
+    registry = ToolRegistry()
+    registry.register(FakeMCPTool())
+
+    _, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+    context = _context(user_id="u1", session_id="s1", state={})
+
+    result = await after_tool_callback(
+        _named_tool("load_tool"),
+        {"tool_name": "mcp_tool", "args": {"param": "value"}},
+        context,
+        None,
+    )
+
+    assert isinstance(result, dict)
+    assert result["loaded_tool"] == "mcp_tool"
+    assert "Inline execution not available" in result["message"]
+    assert "mcp_tool" in context.state["adk_tool_search.loaded_tools"]
+
+
+async def test_inline_execution_not_found_with_args():
+    registry = ToolRegistry()
+
+    _, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+    context = _context(user_id="u1", session_id="s1", state={})
+
+    result = await after_tool_callback(
+        _named_tool("load_tool"),
+        {"tool_name": "nonexistent", "args": {"x": 1}},
+        context,
+        None,
+    )
+
+    assert isinstance(result, str)
+    assert "not found" in result
+
 
 async def test_session_scoped_callbacks_do_not_leak_across_sessions():
     registry = ToolRegistry()
