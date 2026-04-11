@@ -346,12 +346,5 @@ def create_tool_search_agent(
 
 
 def _guess_categories(registry: ToolRegistry) -> list[str]:
-    """Derive rough category names from tool name prefixes."""
-    prefixes = set()
-    for name in registry.tool_names:
-        parts = name.replace("-", "_").split("_")
-        if len(parts) > 1:
-            prefixes.add(parts[0])
-        else:
-            prefixes.add(name)
-    return sorted(prefixes)[:10]
+    """Derive category labels from the tool registry using meaningful name segments."""
+    return registry.guess_categories()
