@@ -31,12 +31,36 @@ This library reduces context usage by ~95% and keeps tool selection accurate acr
 │  Runtime (per user request)                         │
 │  1. Agent calls search_tools("weather forecast")    │
 │  2. Registry returns top-5 matches (name + snippet) │
-│  3. Agent calls load_tool("get_forecast")           │
-│  4. Tool is marked loaded for this session           │
-│  5. before_model_callback injects it next turn       │
-│  6. Agent calls get_forecast(location="Tokyo")      │
+│  3a. Option A: Load + execute in one turn           │
+│     load_tool("get_forecast", args={"loc": "Tokyo"})│
+│     → Returns the tool result immediately           │
+│  3b. Option B: Load for subsequent turns            │
+│     load_tool("get_forecast")                       │
+│     → Tool is marked loaded for this session        │
+│     → before_model_callback injects it next turn    │
+│     → Agent calls get_forecast(location="Tokyo")   │
 └─────────────────────────────────────────────────────┘
 ```
+
+### Inline execution (one-turn)
+
+`load_tool` accepts an optional `args` dict. When provided, the tool is loaded
+and executed immediately within the `after_tool_callback`, returning the result
+in the same turn. This eliminates the extra round-trip:
+
+```python
+# Three-turn flow (load, then call separately)
+load_tool("get_weather")                          # Turn 2: "loaded, call next turn"
+get_weather(location="Tokyo")                      # Turn 3: {"temp": 22, ...}
+
+# Two-turn flow (load + execute inline)
+load_tool("get_weather", args={"location":"Tokyo"})  # Turn 2: {"result": {"temp": 22, ...}}
+```
+
+Inline execution works for plain Python callables, ADK `FunctionTool`, and
+`BaseTool` subclasses that implement `run_async` (including MCP tools). If
+inline execution isn't possible for a tool type, the tool is still loaded for
+use on the next turn.
 
 Loaded tools are session-scoped. A tool loaded in one session is not exposed to other sessions.
 
@@ -186,6 +210,8 @@ GITHUB_TOKEN=ghp_... uv run python examples/mcp_demo.py
 
 ### `create_search_and_load_tools(registry)`
 Returns `(search_tools, load_tool)` — the two lightweight functions to give your agent.
+
+`load_tool` accepts an optional `args` dict for inline execution (see above).
 
 ### `create_session_scoped_loader_callbacks(registry)`
 Returns `(before_model_callback, after_tool_callback)` that keep loaded tools scoped to each session.
