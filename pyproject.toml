@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adk-tool-search"
-version = "0.1.0"
+version = "0.2.0"
 description = "Dynamic tool search for Google ADK — load tools on demand instead of all at once"
 authors = [
     {name = "ADK Tool Search Contributors"}
