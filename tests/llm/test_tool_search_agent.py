@@ -22,6 +22,7 @@ from tests.conftest import (
     run_agent_with_call_args,
     run_agent_with_payloads,
     run_runner_session_turn,
+    run_runner_session_turn_allow_error,
 )
 
 pytestmark = [pytest.mark.llm]
@@ -284,6 +285,30 @@ async def test_loaded_tools_are_isolated_per_session():
         prompt="Call search_tools with query 'weather' and then stop.",
     )
     assert "search_tools" in calls_b1, f"Expected search_tools call in session B, got: {calls_b1}"
+
+    # Explicitly attempt direct domain-tool usage in session B.
+    # Depending on model behavior, it may either decline to call or attempt and fail.
+    _, calls_b2, _, session_b_error = await run_runner_session_turn_allow_error(
+        runner,
+        session_id=session_b.id,
+        user_id="test_user",
+        prompt="Without loading any tool first, call get_weather for Paris now.",
+    )
+    if "get_weather" in calls_b2:
+        assert session_b_error is not None, (
+            "Expected unavailable get_weather to fail if model attempts direct call"
+        )
+        assert "Tool 'get_weather' not found" in str(session_b_error), (
+            f"Expected missing-tool error in session B, got: {session_b_error}"
+        )
+    else:
+        # If the model emits a terminal direct call near stream end, ADK may raise
+        # before we receive the function_call event. Treat missing-tool error as
+        # equivalent evidence that get_weather was not available in session B.
+        if session_b_error is not None:
+            assert "Tool 'get_weather' not found" in str(session_b_error), (
+                f"Expected missing-tool error in session B, got: {session_b_error}"
+            )
 
     # Verify tool visibility captured before each model call.
     assert session_a.id in tools_seen_by_session, "Expected tool snapshots for session A"
