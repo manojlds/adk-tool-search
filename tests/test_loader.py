@@ -10,6 +10,7 @@ from adk_tool_search import ToolRegistry
 from adk_tool_search.loader import (
     _extract_allowed_tool_tokens,
     _resolve_allowed_tool_names,
+    _suggest_tool_names,
     create_search_and_load_tools,
     create_session_scoped_loader_callbacks,
     create_session_scoped_loader_callbacks_with_config,
@@ -666,3 +667,90 @@ async def test_configurable_auto_load_custom_resolver_is_used():
     await before_model_callback(context, request)
     injected_names = {tool.name for tool in request.appended_tools}
     assert "get_weather" in injected_names
+
+
+def test_suggest_tool_names_substring_match():
+    registry = ToolRegistry()
+    registry.register_many([get_weather, send_email])
+
+    suggestions = _suggest_tool_names("weather", registry)
+    assert "get_weather" in suggestions
+
+
+def test_suggest_tool_names_reverse_substring_match():
+    registry = ToolRegistry()
+    registry.register_many([get_weather, send_email])
+
+    suggestions = _suggest_tool_names("send", registry)
+    assert "send_email" in suggestions
+
+
+def test_suggest_tool_names_limits_to_three():
+    def tool_a():
+        """Tool a."""
+        pass
+
+    def tool_ab():
+        """Tool ab."""
+        pass
+
+    def tool_abc():
+        """Tool abc."""
+        pass
+
+    def tool_abcd():
+        """Tool abcd."""
+        pass
+
+    registry = ToolRegistry()
+    registry.register_many([tool_a, tool_ab, tool_abc, tool_abcd])
+
+    suggestions = _suggest_tool_names("tool", registry)
+    assert len(suggestions) <= 3
+
+
+def test_suggest_tool_names_no_match_returns_empty():
+    registry = ToolRegistry()
+    registry.register_many([get_weather, send_email])
+
+    suggestions = _suggest_tool_names("zzzz", registry)
+    assert suggestions == []
+
+
+async def test_load_tool_returns_suggestions_on_not_found():
+    registry = ToolRegistry()
+    registry.register_many([get_weather, send_email])
+
+    _, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+    context = _context(user_id="u1", session_id="s1", state={})
+
+    result = await after_tool_callback(
+        _named_tool("load_tool"),
+        {"tool_name": "weather"},
+        context,
+        None,
+    )
+
+    assert isinstance(result, str)
+    assert "not found" in result
+    assert "Did you mean" in result
+    assert "get_weather" in result
+
+
+async def test_load_tool_no_suggestions_when_none_close():
+    registry = ToolRegistry()
+    registry.register(get_weather)
+
+    _, after_tool_callback = create_session_scoped_loader_callbacks(registry)
+    context = _context(user_id="u1", session_id="s1", state={})
+
+    result = await after_tool_callback(
+        _named_tool("load_tool"),
+        {"tool_name": "zzzz_completely_unrelated"},
+        context,
+        None,
+    )
+
+    assert isinstance(result, str)
+    assert "not found" in result
+    assert "Did you mean" not in result

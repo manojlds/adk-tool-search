@@ -141,6 +141,69 @@ class TestToolRegistry:
         assert "weather" in tokens
         assert "forecast" in tokens
 
+    def test_tokenize_filters_stopwords(self):
+        tokens = ToolRegistry._tokenize("the quick brown fox jumps over the lazy dog")
+        assert "the" not in tokens
+        assert "quick" in tokens
+        assert "brown" in tokens
+        assert "fox" in tokens
+        assert "over" in tokens
+
+    def test_tokenize_stopwords_custom(self):
+        tokens = ToolRegistry._tokenize("hello world test", stopwords=frozenset({"hello"}))
+        assert "hello" not in tokens
+        assert "world" in tokens
+        assert "test" in tokens
+
+    def test_tokenize_stopwords_none(self):
+        tokens = ToolRegistry._tokenize("the quick brown", stopwords=frozenset())
+        assert "the" in tokens
+        assert "quick" in tokens
+
+    def test_tokenize_min_length_default_filters_single_chars(self):
+        tokens = ToolRegistry._tokenize("a big cat")
+        assert "a" not in tokens
+        assert "big" in tokens
+        assert "cat" in tokens
+
+    def test_tokenize_min_length_custom(self):
+        tokens = ToolRegistry._tokenize("I am a test", min_length=3, stopwords=frozenset())
+        assert "am" not in tokens
+        assert "test" in tokens
+
+    def test_tokenize_empty_string(self):
+        tokens = ToolRegistry._tokenize("")
+        assert tokens == []
+
+    def test_tokenize_only_stopwords(self):
+        tokens = ToolRegistry._tokenize("the a an is it")
+        assert tokens == []
+
+    def test_tokenize_case_insensitive(self):
+        tokens1 = ToolRegistry._tokenize("GITHUB")
+        tokens2 = ToolRegistry._tokenize("github")
+        assert tokens1 == tokens2
+
+    def test_tokenize_punctuation_removed(self):
+        tokens = ToolRegistry._tokenize("Hello, World! How are you?", stopwords=frozenset())
+        assert "hello" in tokens
+        assert "world" in tokens
+        assert "you" in tokens
+
+    def test_search_description_snippet_truncated_at_150(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        long_desc = "A" * 200
+        registry = ToolRegistry()
+        registry.register(FakeTool("long_tool", long_desc))
+        results = registry.search("long")
+        assert len(results) == 1
+        snippet = results[0].split(": ", 1)[1]
+        assert len(snippet) <= 150
+
     def test_guess_categories_empty_registry(self):
         registry = ToolRegistry()
         assert registry.guess_categories() == []
@@ -204,3 +267,85 @@ class TestToolRegistry:
 
         categories = registry.guess_categories()
         assert "weather" in categories
+
+    def test_search_name_match_boosting_exact(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        registry = ToolRegistry()
+        registry.register(FakeTool("weather", "General weather information"))
+        registry.register(FakeTool("get_forecast", "Get a weather forecast for a city"))
+        registry.register(FakeTool("send_alert", "Send a weather alert to users"))
+
+        results = registry.search("weather")
+        assert results[0].startswith("weather:")
+
+    def test_search_name_match_boosting_substring(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        registry = ToolRegistry()
+        registry.register(FakeTool("github_list_issues", "List repository issues"))
+        registry.register(FakeTool("send_email", "Send an email about any topic"))
+
+        results = registry.search("github")
+        assert any("github_list_issues" in r for r in results)
+        first_name = results[0].split(":")[0]
+        assert "github" in first_name.lower()
+
+    def test_search_name_match_boosted_over_description_match(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        registry = ToolRegistry()
+        registry.register(FakeTool("search_files", "Find and retrieve documents"))
+        registry.register(FakeTool("list_docs", "Search through documentation"))
+
+        results = registry.search("search")
+        assert results[0].startswith("search_files:")
+
+    def test_search_multiple_query_tokens_boost_name(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        registry = ToolRegistry()
+        registry.register(FakeTool("browser_navigate", "Navigate to a URL"))
+        registry.register(FakeTool("browser_click", "Click an element"))
+
+        results = registry.search("browser click")
+        assert results[0].startswith("browser_click:")
+
+    def test_search_exact_name_match_ranks_highest(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        registry = ToolRegistry()
+        registry.register(FakeTool("weather", "Weather data"))
+        registry.register(FakeTool("get_weather", "Get current weather conditions"))
+        registry.register(FakeTool("weather_alert", "Weather alert system"))
+
+        results = registry.search("weather")
+        assert results[0].startswith("weather:")
+
+    def test_search_partial_name_still_boosts(self):
+        class FakeTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+
+        registry = ToolRegistry()
+        registry.register(FakeTool("list_github_issues", "List all issues in a repo"))
+        registry.register(FakeTool("send_email", "Compose and send email messages"))
+
+        results = registry.search("github issues")
+        assert any("list_github_issues" in r for r in results)
