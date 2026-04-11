@@ -288,6 +288,24 @@ async def test_use_skill_allowed_tools_are_auto_loaded_in_session_state():
     assert {"get_weather", "send_email"}.issubset(injected_names)
 
 
+async def test_injected_tools_are_deterministically_sorted_for_cache_stability():
+    registry = ToolRegistry()
+    registry.register_many([get_weather, send_email])
+
+    before_model_callback, _ = create_session_scoped_loader_callbacks(registry)
+    context = _context(
+        user_id="u1",
+        session_id="s1",
+        state={"adk_tool_search.loaded_tools": ["send_email", "get_weather"]},
+    )
+
+    request = FakeLlmRequest(tool_names=["search_tools", "load_tool"])
+    await before_model_callback(context, request)
+
+    injected_order = [tool.name for tool in request.appended_tools]
+    assert injected_order == ["get_weather", "send_email"]
+
+
 async def test_configurable_auto_load_field_only_mode_allows_non_use_skill_tool():
     registry = ToolRegistry()
     registry.register_many([get_weather])
