@@ -58,6 +58,7 @@ def _resolve_allowed_tool_names(
             candidates.extend(
                 [value, value.lower(), value.replace("-", "_"), value.lower().replace("-", "_")]
             )
+        candidates = list(dict.fromkeys(candidates))
 
         matched_name: str | None = None
         for candidate in candidates:
