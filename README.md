@@ -46,6 +46,13 @@ Persistence model:
 - With persistent session services (SQLite/DB/Vertex), loaded tools survive process restarts.
 - With in-memory session services, restart continuity is not available.
 
+Skills integration:
+- If a `use_skill` tool call returns `allowed_tools` (or `allowed_tools_raw` / `allowed-tools`),
+  `adk-tool-search` auto-loads matching registry tools into the same session state.
+- This keeps skill-required tools deferred by default and activates them only when the skill is activated.
+- Supported token forms include plain names (for example, `get_weather`) and function-like tokens
+  (for example, `Bash(git:*)`, resolved by base name when possible).
+
 ## Install
 
 ```bash
@@ -72,6 +79,7 @@ from adk_tool_search import (
     ToolRegistry,
     create_search_and_load_tools,
     create_session_scoped_loader_callbacks,
+    create_session_scoped_loader_callbacks_with_config,
 )
 
 def get_weather(location: str) -> dict:
@@ -181,6 +189,28 @@ Returns `(search_tools, load_tool)` — the two lightweight functions to give yo
 
 ### `create_session_scoped_loader_callbacks(registry)`
 Returns `(before_model_callback, after_tool_callback)` that keep loaded tools scoped to each session.
+
+### `create_session_scoped_loader_callbacks_with_config(...)`
+Configurable variant of session-scoped callbacks for skills/tool interoperability:
+- `auto_load_from_tool_names`: set of tool names eligible for response-based auto-load (default: `{\"use_skill\"}`)
+- `auto_load_field_keys`: ordered response keys to inspect for allowed-tools tokens
+- `auto_load_when`: optional predicate `(tool_name, args, tool_response) -> bool` (overrides name-based matching)
+- `allowed_tool_token_resolver`: optional custom token resolver
+
+Examples:
+
+```python
+# Default strict mode (only use_skill responses can auto-load)
+before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks_with_config(
+    registry,
+)
+
+# Field-driven mode (any tool response containing allowed-tools fields)
+before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks_with_config(
+    registry,
+    auto_load_from_tool_names=None,
+)
+```
 
 ### `create_tool_search_agent(...)` (optional helper)
 Convenience wrapper around manual `LlmAgent` wiring.

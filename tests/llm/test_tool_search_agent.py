@@ -415,3 +415,55 @@ async def test_loaded_tool_persists_across_runner_restart_with_sqlite_session(tm
         "Expected get_weather to remain available after restart when session is persisted, "
         f"got calls: {calls_second}"
     )
+
+
+@pytest.mark.timeout(120)
+async def test_use_skill_auto_loads_allowed_tools_for_session():
+    """When a skill is loaded, allowed tools should become callable next turn."""
+
+    def use_skill(name: str) -> dict:
+        """Load a skill and return instructions plus allowed tools."""
+        if name == "weather-skill":
+            return {
+                "skill_name": name,
+                "instructions": "Use get_weather to answer weather questions.",
+                "allowed_tools": "get_weather",
+            }
+        return {
+            "skill_name": name,
+            "instructions": "No special tools.",
+            "allowed_tools": "",
+        }
+
+    registry = ToolRegistry()
+    registry.register_many(ALL_TOOLS)
+
+    agent = create_tool_search_agent(
+        name="skill_allowed_tools_test",
+        model=make_litellm_model(),
+        registry=registry,
+        always_available_tools=[use_skill],
+    )
+
+    runner = InMemoryRunner(agent=agent, app_name="test")
+    session = await runner.session_service.create_session(app_name="test", user_id="test_user")
+
+    # First turn activates the skill.
+    _, calls_1, _ = await run_runner_session_turn(
+        runner,
+        session_id=session.id,
+        user_id="test_user",
+        prompt="Call use_skill with name 'weather-skill'.",
+    )
+    assert "use_skill" in calls_1, f"Expected use_skill call, got: {calls_1}"
+
+    # Next turn should have get_weather available without explicit load_tool.
+    _, calls_2, _ = await run_runner_session_turn(
+        runner,
+        session_id=session.id,
+        user_id="test_user",
+        prompt="Now call get_weather for Tokyo without calling load_tool.",
+    )
+    assert "get_weather" in calls_2, (
+        f"Expected get_weather to be auto-loaded from skill allowed_tools, got: {calls_2}"
+    )
