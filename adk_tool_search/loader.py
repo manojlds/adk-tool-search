@@ -222,6 +222,59 @@ def create_session_scoped_loader_callbacks_with_config(
                 return None
         return None
 
+    async def _handle_load_tool(args: dict, tool_context: Any) -> dict | str:
+        requested_name = args.get("tool_name", "")
+        inline_args = args.get("args")
+        new_tool = registry.get_tool(requested_name)
+        if not new_tool:
+            return f"Error: Tool '{requested_name}' not found in registry."
+
+        loaded_names = _get_loaded_names_from_state(tool_context)
+        already_loaded = requested_name in loaded_names
+
+        if inline_args and isinstance(inline_args, dict):
+            loaded_names.add(requested_name)
+            _set_loaded_names_in_state(tool_context, loaded_names)
+
+            result = await _execute_tool_inline(new_tool, inline_args, tool_context)
+
+            if already_loaded:
+                if result is not None:
+                    return {
+                        "loaded_tool": requested_name,
+                        "already_loaded": True,
+                        "result": result,
+                    }
+                return {
+                    "loaded_tool": requested_name,
+                    "already_loaded": True,
+                    "message": (
+                        f"Tool '{requested_name}' is already loaded. Call it directly next turn."
+                    ),
+                }
+
+            if result is not None:
+                return {"loaded_tool": requested_name, "result": result}
+            return {
+                "loaded_tool": requested_name,
+                "message": (
+                    f"Tool '{requested_name}' is now loaded for this session. "
+                    "Inline execution not available for this tool type — "
+                    "call it directly on your next turn."
+                ),
+            }
+
+        if already_loaded:
+            return f"Tool '{requested_name}' is already loaded and ready to use in this session."
+
+        loaded_names.add(requested_name)
+        _set_loaded_names_in_state(tool_context, loaded_names)
+
+        return (
+            f"Tool '{requested_name}' is now loaded for this session and ready to use. "
+            "You can call it directly on your next turn."
+        )
+
     async def after_tool_callback(
         tool: Any, args: dict, tool_context: Any, tool_response: Any
     ) -> Any:
@@ -232,61 +285,7 @@ def create_session_scoped_loader_callbacks_with_config(
             return "Error: Could not determine session context for tool loading."
 
         if tool_name == "load_tool":
-            requested_name = args.get("tool_name", "")
-            inline_args = args.get("args")
-            new_tool = registry.get_tool(requested_name)
-            if not new_tool:
-                return f"Error: Tool '{requested_name}' not found in registry."
-
-            loaded_names = _get_loaded_names_from_state(tool_context)
-            already_loaded = requested_name in loaded_names
-
-            if inline_args and isinstance(inline_args, dict):
-                loaded_names.add(requested_name)
-                _set_loaded_names_in_state(tool_context, loaded_names)
-
-                if already_loaded:
-                    result = await _execute_tool_inline(new_tool, inline_args, tool_context)
-                    if result is not None:
-                        return {
-                            "loaded_tool": requested_name,
-                            "already_loaded": True,
-                            "result": result,
-                        }
-                    return {
-                        "loaded_tool": requested_name,
-                        "already_loaded": True,
-                        "message": (
-                            f"Tool '{requested_name}' is already loaded. Call it directly next turn."
-                        ),
-                    }
-                result = await _execute_tool_inline(new_tool, inline_args, tool_context)
-                if result is not None:
-                    return {
-                        "loaded_tool": requested_name,
-                        "result": result,
-                    }
-                return {
-                    "loaded_tool": requested_name,
-                    "message": (
-                        f"Tool '{requested_name}' is now loaded for this session. "
-                        f"Inline execution not available for this tool type — "
-                        f"call it directly on your next turn."
-                    ),
-                }
-
-            if already_loaded:
-                return (
-                    f"Tool '{requested_name}' is already loaded and ready to use in this session."
-                )
-
-            loaded_names.add(requested_name)
-            _set_loaded_names_in_state(tool_context, loaded_names)
-
-            return (
-                f"Tool '{requested_name}' is now loaded for this session and ready to use. "
-                "You can call it directly on your next turn."
-            )
+            return await _handle_load_tool(args, tool_context)
 
         if _should_auto_load_from_response(tool_name, args, tool_response):
             tokens = _extract_allowed_tool_tokens(tool_response, field_keys=auto_load_field_keys)
