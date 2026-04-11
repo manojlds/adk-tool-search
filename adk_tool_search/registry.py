@@ -65,17 +65,14 @@ class ToolRegistry:
             ranked_indices = positive_ranked_indices
         else:
             query_terms = set(tokenized_query)
-            lexical_ranked_indices = sorted(
-                range(len(self._descriptions)),
-                key=lambda item_idx: len(
-                    query_terms.intersection(self._tokenized_descriptions[item_idx])
-                ),
-                reverse=True,
-            )
+            overlaps = [
+                (idx, len(query_terms.intersection(tokens)))
+                for idx, tokens in enumerate(self._tokenized_descriptions)
+            ]
             ranked_indices = [
                 idx
-                for idx in lexical_ranked_indices
-                if len(query_terms.intersection(self._tokenized_descriptions[idx])) > 0
+                for idx, overlap in sorted(overlaps, key=lambda item: item[1], reverse=True)
+                if overlap > 0
             ]
 
         results = []
