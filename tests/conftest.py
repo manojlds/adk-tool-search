@@ -145,3 +145,37 @@ async def run_agent_with_payloads(
                     )
 
     return texts, function_calls, function_responses
+
+
+async def run_runner_session_turn(
+    runner,
+    *,
+    session_id: str,
+    user_id: str,
+    prompt: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """Run a single prompt turn on an existing runner/session."""
+    from google.genai import types
+
+    content = types.Content(role="user", parts=[types.Part(text=prompt)])
+    texts: list[str] = []
+    function_calls: list[str] = []
+    function_responses: list[str] = []
+
+    async for event in runner.run_async(
+        session_id=session_id, user_id=user_id, new_message=content
+    ):
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if hasattr(part, "text") and part.text:
+                    texts.append(part.text)
+                if hasattr(part, "function_call") and part.function_call:
+                    name = part.function_call.name
+                    if isinstance(name, str) and name:
+                        function_calls.append(name)
+                if hasattr(part, "function_response") and part.function_response:
+                    name = part.function_response.name
+                    if isinstance(name, str) and name:
+                        function_responses.append(name)
+
+    return texts, function_calls, function_responses
