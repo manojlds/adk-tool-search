@@ -213,7 +213,16 @@ async def test_search_with_no_matching_tool_does_not_load_or_call_domain_tool():
 
     full_text = " ".join(texts).lower()
     assert any(
-        word in full_text for word in ("unavailable", "not found", "no tools", "no matching")
+        word in full_text
+        for word in (
+            "unavailable",
+            "not found",
+            "no tools",
+            "no matching",
+            "not available",
+            "couldn't find",
+            "doesn't currently have",
+        )
     ), f"Expected unavailable/no-match message, got: {full_text}"
 
 
@@ -290,4 +299,43 @@ async def test_loaded_tools_are_isolated_per_session():
     first_tools_b = tools_seen_by_session[session_b.id][0]
     assert first_tools_b == {"search_tools", "load_tool"}, (
         f"Expected only meta-tools at start of session B, got: {first_tools_b}"
+    )
+
+
+@pytest.mark.timeout(120)
+async def test_single_tool_search_returns_match_for_relevant_query():
+    """Regression: search should still find relevant tools in a tiny registry."""
+    registry = ToolRegistry()
+    registry.register(get_weather)
+
+    agent = create_tool_search_agent(
+        name="single_tool_search_regression",
+        model=make_litellm_model(),
+        registry=registry,
+        instruction=(
+            "Debug mode: call search_tools exactly once with query 'weather'. "
+            "Do not call load_tool or any other tools. Then report the search result."
+        ),
+    )
+
+    _, calls_with_args, responses_with_payloads = await run_agent_with_payloads(
+        agent,
+        "Run the debug search now.",
+    )
+
+    search_calls = [call for call in calls_with_args if call["name"] == "search_tools"]
+    assert search_calls, f"Expected search_tools call, got: {calls_with_args}"
+
+    search_responses = [item for item in responses_with_payloads if item["name"] == "search_tools"]
+    assert search_responses, (
+        f"Expected search_tools response payload, got: {responses_with_payloads}"
+    )
+
+    payload = search_responses[-1]["response"]
+    assert isinstance(payload, dict), f"Expected dict payload, got: {payload}"
+
+    result_list = payload.get("result")
+    assert isinstance(result_list, list), f"Expected list search results, got: {payload}"
+    assert any(str(item).startswith("get_weather:") for item in result_list), (
+        f"Expected 'get_weather' in search_tools results for query 'weather', got: {result_list}"
     )

@@ -1,4 +1,5 @@
 import inspect
+import re
 from typing import Any
 
 from rank_bm25 import BM25Okapi
@@ -10,6 +11,7 @@ class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, Any] = {}
         self._descriptions: list[str] = []
+        self._tokenized_descriptions: list[list[str]] = []
         self._tool_names: list[str] = []
         self._bm25: BM25Okapi | None = None
 
@@ -43,24 +45,43 @@ class ToolRegistry:
         if not self._bm25:
             return []
 
-        tokenized_query = query.lower().split()
+        tokenized_query = self._tokenize(query)
         if not tokenized_query:
             return []
 
         scores = self._bm25.get_scores(tokenized_query)
-        ranked_indices = sorted(
-            range(len(self._descriptions)),
-            key=lambda idx: float(scores[idx]),
-            reverse=True,
-        )
+
+        positive_ranked_indices = [
+            idx
+            for idx in sorted(
+                range(len(self._descriptions)),
+                key=lambda item_idx: float(scores[item_idx]),
+                reverse=True,
+            )
+            if float(scores[idx]) > 0
+        ]
+
+        if positive_ranked_indices:
+            ranked_indices = positive_ranked_indices
+        else:
+            query_terms = set(tokenized_query)
+            lexical_ranked_indices = sorted(
+                range(len(self._descriptions)),
+                key=lambda item_idx: len(
+                    query_terms.intersection(self._tokenized_descriptions[item_idx])
+                ),
+                reverse=True,
+            )
+            ranked_indices = [
+                idx
+                for idx in lexical_ranked_indices
+                if len(query_terms.intersection(self._tokenized_descriptions[idx])) > 0
+            ]
 
         results = []
         for idx in ranked_indices:
             if len(results) >= n:
                 break
-
-            if float(scores[idx]) <= 0:
-                continue
 
             doc = self._descriptions[idx]
             name = self._tool_names[idx]
@@ -98,5 +119,9 @@ class ToolRegistry:
         return name, doc
 
     def _rebuild_index(self) -> None:
-        tokenized = [desc.lower().split() for desc in self._descriptions]
-        self._bm25 = BM25Okapi(tokenized)
+        self._tokenized_descriptions = [self._tokenize(desc) for desc in self._descriptions]
+        self._bm25 = BM25Okapi(self._tokenized_descriptions)
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        return re.findall(r"[a-z0-9]+", text.lower())

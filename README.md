@@ -54,8 +54,7 @@ uv sync --all-extras
 ### With plain Python functions
 
 ```python
-from google.adk.agents import LlmAgent
-from adk_tool_search import ToolRegistry, create_search_and_load_tools, create_dynamic_loader_callback
+from adk_tool_search import ToolRegistry, create_tool_search_agent
 
 def get_weather(location: str) -> dict:
     """Get current weather for a location."""
@@ -69,29 +68,20 @@ def send_email(to: str, subject: str, body: str) -> dict:
 registry = ToolRegistry()
 registry.register_many([get_weather, send_email])
 
-# 2. Create search + load tools
-search_tools, load_tool = create_search_and_load_tools(registry)
-
-# 3. Create agent with only the search/load tools
-agent_ref: list[LlmAgent] = []
-callback = create_dynamic_loader_callback(registry, agent_ref)
-
-agent = LlmAgent(
+# 2. Create agent with dynamic search/load behavior
+agent = create_tool_search_agent(
     name="Assistant",
     model="gemini-2.5-flash",
+    registry=registry,
     instruction="Use search_tools to find tools, load_tool to activate them, then call them.",
-    tools=[search_tools, load_tool],
-    after_tool_callback=callback,
 )
-agent_ref.append(agent)
 ```
 
 ### With MCP servers
 
 ```python
-from google.adk.agents import LlmAgent
 from google.adk.tools.mcp import MCPToolset, StdioConnectionParams
-from adk_tool_search import ToolRegistry, create_search_and_load_tools, create_dynamic_loader_callback
+from adk_tool_search import ToolRegistry, create_tool_search_agent
 
 # Fetch tools from MCP server (but don't give to agent)
 mcp = MCPToolset(connection_params=StdioConnectionParams(command="npx", args=["-y", "@modelcontextprotocol/server-github"]))
@@ -102,18 +92,12 @@ registry = ToolRegistry()
 registry.register_many(mcp_tools)
 
 # Wire up the agent
-search_tools, load_tool = create_search_and_load_tools(registry)
-agent_ref: list[LlmAgent] = []
-callback = create_dynamic_loader_callback(registry, agent_ref)
-
-agent = LlmAgent(
+agent = create_tool_search_agent(
     name="GitHubAssistant",
     model="gemini-2.5-flash",
+    registry=registry,
     instruction="Use search_tools to find tools, load_tool to activate them, then call them.",
-    tools=[search_tools, load_tool],
-    after_tool_callback=callback,
 )
-agent_ref.append(agent)
 ```
 
 ### Using the helper factory
@@ -158,9 +142,8 @@ GITHUB_TOKEN=ghp_... uv run python examples/mcp_demo.py
 ### `create_search_and_load_tools(registry)`
 Returns `(search_tools, load_tool)` — the two lightweight functions to give your agent.
 
-### `create_dynamic_loader_callback(registry, agent_ref)`
-Returns an `after_tool_callback` that intercepts `load_tool` calls and injects tools into the agent.
-`agent_ref` is a single-element list you append the agent to after creation.
+### `create_session_scoped_loader_callbacks(registry)`
+Returns `(before_model_callback, after_tool_callback)` that keep loaded tools scoped to each session.
 
 ### `create_tool_search_agent(...)` (helper)
 - `name`, `model` — Standard Agent params

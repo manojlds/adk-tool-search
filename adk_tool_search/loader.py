@@ -21,7 +21,7 @@ def _session_key_from_context(context: Any) -> tuple[str, str] | None:
     return str(user_id), str(session_id)
 
 
-def _create_session_scoped_loader_callbacks(registry: ToolRegistry):
+def create_session_scoped_loader_callbacks(registry: ToolRegistry):
     """Create callbacks that load tools per session instead of globally.
 
     Returns:
@@ -125,46 +125,6 @@ def create_search_and_load_tools(registry: ToolRegistry):
     return search_tools, load_tool
 
 
-def create_dynamic_loader_callback(
-    registry: ToolRegistry,
-    agent_ref: list[Agent],
-):
-    """Create an after_tool_callback that injects tools on load_tool calls.
-
-    agent_ref is a single-element list holding the agent, used as a mutable
-    reference so the callback can access the agent after it's created.
-    """
-
-    async def dynamic_loader_callback(
-        tool: Any, args: dict, tool_context: Any, tool_response: Any
-    ) -> Any:
-        tool_name = getattr(tool, "name", getattr(tool, "__name__", str(tool)))
-
-        if tool_name != "load_tool":
-            return tool_response
-
-        requested_name = args.get("tool_name", "")
-        new_tool = registry.get_tool(requested_name)
-        if not new_tool:
-            return f"Error: Tool '{requested_name}' not found in registry."
-
-        agent = agent_ref[0]
-        current_names = set()
-        for t in agent.tools:
-            if hasattr(t, "name"):
-                current_names.add(t.name)
-            elif hasattr(t, "__name__"):
-                current_names.add(t.__name__)
-
-        if requested_name in current_names:
-            return f"Tool '{requested_name}' is already loaded and ready to use."
-
-        agent.tools.append(new_tool)
-        return f"Tool '{requested_name}' is now loaded and ready to use. You can call it directly."
-
-    return dynamic_loader_callback
-
-
 def create_tool_search_agent(
     *,
     name: str,
@@ -186,7 +146,7 @@ def create_tool_search_agent(
     """
     search_tools, load_tool = create_search_and_load_tools(registry)
 
-    before_model_callback, after_tool_callback = _create_session_scoped_loader_callbacks(registry)
+    before_model_callback, after_tool_callback = create_session_scoped_loader_callbacks(registry)
 
     existing_before_model_callback = agent_kwargs.pop("before_model_callback", None)
     existing_after_tool_callback = agent_kwargs.pop("after_tool_callback", None)

@@ -1,13 +1,13 @@
-from adk_tool_search.loader import (
-    create_dynamic_loader_callback,
+from .loader import (
     create_search_and_load_tools,
+    create_session_scoped_loader_callbacks,
     create_tool_search_agent,
 )
-from adk_tool_search.registry import ToolRegistry
+from .registry import ToolRegistry
 
 __all__ = [
     "ToolRegistry",
     "create_search_and_load_tools",
-    "create_dynamic_loader_callback",
+    "create_session_scoped_loader_callbacks",
     "create_tool_search_agent",
 ]
